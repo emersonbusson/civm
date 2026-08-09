@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.22.36](https://github.com/advoq/civm/compare/v1.22.35...v1.22.36) (2026-08-09)
+
+
+### Bug Fixes
+
+* **ci:** harden reruns and upgrade checkout to Node 24 ([65f0641](https://github.com/advoq/civm/commit/65f0641aceb51aad6b29834cfc2cadd390ed6891))
+* **ci:** keep fork code off self-hosted smoke ([#273](https://github.com/advoq/civm/issues/273)) ([68c0f59](https://github.com/advoq/civm/commit/68c0f59d1e125dda4db08a9b9643df9fe2d6a240))
+* **runner:** classify transient action download failures ([13e7dbb](https://github.com/advoq/civm/commit/13e7dbb817a2b1d41b3c98835346428de0f8c310))
+
+
+### CI
+
+* upgrade checkout actions to Node 24 ([5de0bc1](https://github.com/advoq/civm/commit/5de0bc1c04cba250e60307753be9f7fc3ce9393f))
+* upgrade setup-go to Node 24 ([#275](https://github.com/advoq/civm/issues/275)) ([cadc2e9](https://github.com/advoq/civm/commit/cadc2e94151c10a8eb6ab70c59edb8d1d089f5c7))
+
 ## [1.22.35](https://github.com/advoq/civm/compare/v1.22.34...v1.22.35) (2026-08-06)
 
 
