@@ -61,7 +61,7 @@ jobs:
     outputs:
       result: ${{ steps.flag.outputs.result }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -101,7 +101,7 @@ jobs:
     if: needs.gates-remote.result != 'success'
     runs-on: [self-hosted, civm]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:

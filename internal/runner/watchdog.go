@@ -1403,6 +1403,9 @@ func ClassifyFailureLog(log string) FailureClassification {
 		return FailureClassification{Kind: FailureSecret, Signature: sig, Detail: "secret/auth signature present"}
 	}
 	sig, networkIdx := firstSignature(lower, networkCheckoutSignatures)
+	if actionSig, actionIdx := firstSignature(lower, actionDownloadTransientSignatures); actionIdx >= 0 && (networkIdx < 0 || actionIdx < networkIdx) {
+		sig, networkIdx = actionSig, actionIdx
+	}
 	if networkIdx < 0 {
 		if codeSig, idx := firstSignature(lower, codeFailureSignatures); idx >= 0 {
 			return FailureClassification{Kind: FailureCode, Signature: codeSig, Detail: "code/test/lint/build signature present"}
@@ -1413,6 +1416,11 @@ func ClassifyFailureLog(log string) FailureClassification {
 		return FailureClassification{Kind: FailureCode, Signature: codeSig, Detail: "code/test/lint/build step started before network failure"}
 	}
 	return FailureClassification{Kind: FailureNetworkCheckout, Signature: sig, Detail: "transient checkout/network signature"}
+}
+
+var actionDownloadTransientSignatures = []string{
+	"failed to resolve action download info. error: internal server error",
+	"failed to resolve action download info. error: service unavailable",
 }
 
 var networkCheckoutSignatures = []string{

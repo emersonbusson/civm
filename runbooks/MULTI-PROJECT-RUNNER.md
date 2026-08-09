@@ -97,7 +97,7 @@ Modelo atual: runner persistente por repo. Isolamento vem do workspace
 per-job e do cleanup operacional, não de runner efêmero/JIT:
 
 - `GITHUB_WORKSPACE` unico per-job (delete + recreate entre jobs)
-- `actions/checkout@v4` faz fresh git clone (sem state preservado)
+- `actions/checkout@v7` faz fresh git clone (sem state preservado)
 - `civmctl-cleanup.timer` (04:00 UTC) limpa Docker/tmp/_work diariamente,
   mas aborta se detectar job/build ativo
 - `civmctl-runner-watchdog.timer` repara hooks e runner offline/failed sem

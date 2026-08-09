@@ -48,7 +48,7 @@ jobs:
       use_local: ${{ steps.decide.outputs.use_local }}
       route_reason: ${{ steps.decide.outputs.route_reason }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -82,7 +82,7 @@ jobs:
     needs: ci-router
     runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: echo "PLACEHOLDER — substituir por lint real (eslint, golangci-lint, etc)"
 
   test:
@@ -90,7 +90,7 @@ jobs:
     needs: [ci-router, lint]
     runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: echo "PLACEHOLDER — substituir por tests reais (go test, vitest, etc)"
 
   build:
@@ -98,7 +98,7 @@ jobs:
     needs: [ci-router, lint, test]
     runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: echo "PLACEHOLDER — substituir por build real"
 
   # Gates aggregator. Sempre roda em civm. Branch protection deve

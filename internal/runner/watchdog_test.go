@@ -1580,6 +1580,33 @@ func TestClassifyFailureLogNetworkCheckout(t *testing.T) {
 	}
 }
 
+func TestClassifyFailureLogActionDownloadTransientServerFailure(t *testing.T) {
+	t.Parallel()
+	for _, serverFailure := range []string{"Internal Server Error", "Service Unavailable"} {
+		serverFailure := serverFailure
+		t.Run(serverFailure, func(t *testing.T) {
+			t.Parallel()
+			log := "Prepare all required actions\nGetting action download info\n" +
+				"Failed to resolve action download info. Error: " + serverFailure
+			got := ClassifyFailureLog(log)
+			if got.Kind != FailureNetworkCheckout {
+				t.Fatalf("Kind = %s, want %s (%+v)", got.Kind, FailureNetworkCheckout, got)
+			}
+		})
+	}
+}
+
+func TestClassifyFailureLogActionDownloadWithoutTransientServerFailureIsUnknown(t *testing.T) {
+	t.Parallel()
+	log := "Prepare all required actions\n" +
+		"Failed to resolve action download info. Error: action metadata is invalid\n" +
+		"Run integration tests\nInternal Server Error"
+	got := ClassifyFailureLog(log)
+	if got.Kind != FailureUnknown {
+		t.Fatalf("Kind = %s, want %s (%+v)", got.Kind, FailureUnknown, got)
+	}
+}
+
 func TestClassifyFailureLogLintBeforeNetworkIsNotNetwork(t *testing.T) {
 	t.Parallel()
 	log := "Run golangci-lint run ./...\ninternal/foo.go:12:1: lint failed\nfatal: early EOF"
@@ -1650,7 +1677,8 @@ func TestWatchdogTriggersNetworkRerunAndWritesMarker(t *testing.T) {
 		return WatchdogPullRequest{Number: 7, State: "open", MergeableState: "clean"}, nil
 	}
 	opts.RunLogFn = func(context.Context, string, int64) (string, error) {
-		return "Run actions/checkout@v5\nRPC failed; curl 92 HTTP/2 stream was not closed cleanly: CANCEL\n", nil
+		return "Prepare all required actions\nGetting action download info\n" +
+			"Failed to resolve action download info. Error: Service Unavailable\n", nil
 	}
 	opts.RerunFn = func(_ context.Context, repo string, runID int64) error {
 		if repo != "acme/civm" {
