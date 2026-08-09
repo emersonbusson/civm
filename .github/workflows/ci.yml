@@ -221,8 +221,12 @@ jobs:
     needs: changes
     # Optional lab gate: set repository variable CIVM_SELF_HOSTED_SMOKE=true
     # and register a runner with labels self-hosted,civm. Default off for
-    # public GitHub-hosted free CI.
-    if: needs.changes.outputs.full == 'true' && vars.CIVM_SELF_HOSTED_SMOKE == 'true'
+    # public GitHub-hosted free CI. Paid and fork contexts must never reach a
+    # persistent self-hosted runner, even when the opt-in is enabled.
+    if: >-
+      needs.changes.outputs.full == 'true' &&
+      vars.CIVM_SELF_HOSTED_SMOKE == 'true' && vars.CI_BACKEND != 'paid' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, civm]
     steps:
       - uses: actions/checkout@v7

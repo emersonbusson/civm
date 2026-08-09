@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -43,5 +44,35 @@ func TestCheckoutActionsUseNode24CompatibleMajor(t *testing.T) {
 	}
 	if found == 0 {
 		t.Fatal("no actions/checkout references found in workflows or templates")
+	}
+}
+
+func TestSelfHostedSmokeRejectsForksAndPaidCI(t *testing.T) {
+	t.Parallel()
+
+	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
+	data, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", workflowPath, err)
+	}
+	workflow := string(data)
+	jobStart := strings.Index(workflow, "\n  self-hosted-smoke:")
+	jobEnd := strings.Index(workflow, "\n  ci:")
+	if jobStart < 0 || jobEnd <= jobStart {
+		t.Fatal("CI workflow must keep an isolated self-hosted smoke job")
+	}
+	job := workflow[jobStart:jobEnd]
+	conditionStart := strings.Index(job, "\n    if:")
+	conditionEnd := strings.Index(job, "\n    runs-on:")
+	if conditionStart < 0 || conditionEnd <= conditionStart {
+		t.Fatal("self-hosted smoke must keep an explicit admission condition")
+	}
+	got := strings.Join(strings.Fields(job[conditionStart:conditionEnd]), " ")
+	want := strings.Join(strings.Fields(`if: >-
+      needs.changes.outputs.full == 'true' &&
+      vars.CIVM_SELF_HOSTED_SMOKE == 'true' && vars.CI_BACKEND != 'paid' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)`), " ")
+	if got != want {
+		t.Fatalf("self-hosted smoke admission condition = %q, want %q", got, want)
 	}
 }
