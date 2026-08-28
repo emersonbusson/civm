@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/advoq/civm/compare/v1.22.36...v1.23.0) (2026-08-28)
+
+
+### Features
+
+* initial open-source release of civm ([40d579d](https://github.com/advoq/civm/commit/40d579d324b1445b17c3bc435975c10a9ec4a15c))
+
 ## [1.22.36](https://github.com/emersonbusson/civm/compare/v1.22.35...v1.22.36) (2026-08-09)
 
 
