@@ -1,0 +1,123 @@
+#!/bin/bash
+# civm-generation-boundary — root-side fixed protocol for a clean CI generation.
+#
+# This wrapper is the ONLY generation-boundary program sudo whitelists. It
+# deliberately accepts exactly four fixed verbs: --check, prepare, resume and
+# warn-clean. The latter is the bounded online-only reclaim used while a job is
+# active; it never affects runner state or VM power.
+# No caller-controlled path, timeout, service name, command or argument reaches
+# a privileged executable. The host SSH account never receives NOPASSWD access
+# to generic civmctl, systemctl, docker or a shell.
+
+set -euo pipefail
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+readonly CIVMCTL=/usr/local/bin/civmctl
+readonly CAPABILITY=generation-clean-boundary
+readonly MARKER=civm-generation-boundary/v1
+readonly FIND=/usr/bin/find
+readonly RM=/usr/bin/rm
+readonly DOCKER=/usr/bin/docker
+readonly JOURNALCTL=/usr/bin/journalctl
+readonly FSTRIM=/usr/sbin/fstrim
+readonly SYSTEMCTL=/usr/bin/systemctl
+
+die() {
+  printf '%s\n' "civm-generation-boundary: $1" >&2
+  exit 64
+}
+
+require_capability() {
+  local got
+  got="$("$CIVMCTL" capability "$CAPABILITY")" || exit $?
+  [ "$got" = "$MARKER" ] || {
+    printf '%s\n' "civm-generation-boundary: incompatible civmctl capability" >&2
+    exit 1
+  }
+}
+
+# clean_runner_state removes only fixed, regenerable CI state after strict
+# maintenance has withdrawn every runner label and stopped every listener.
+# The glob is fixed; symlinks are refused before a root-side find can traverse
+# them. Every child of _work is regenerable CI state, including _tool and
+# _actions: a generation boundary intentionally behaves like a fresh paid-CI
+# image, not a warm runner. The directory itself remains so Runner.Listener has
+# its expected work-root path after resume.
+clean_runner_state() {
+  local runner work diag
+  for runner in /home/*/actions-runner*; do
+    [ -d "$runner" ] && [ ! -L "$runner" ] || continue
+    diag="$runner/_diag"
+    work="$runner/_work"
+    if [ -d "$diag" ] && [ ! -L "$diag" ]; then
+      "$FIND" "$diag" -xdev -mindepth 1 -maxdepth 1 -exec "$RM" -rf --one-file-system -- {} +
+    fi
+    if [ -d "$work" ] && [ ! -L "$work" ]; then
+      "$FIND" "$work" -xdev -mindepth 1 -maxdepth 1 -exec "$RM" -rf --one-file-system -- {} +
+    fi
+  done
+}
+
+# clean_home_caches removes fixed, regenerable package-manager and compiler
+# caches for every local runner account and root. It never follows a symlink,
+# never accepts a caller path, and deliberately leaves credentials/configuration
+# outside these cache roots untouched.
+clean_home_caches() {
+  local home cache
+  for home in /root /home/*; do
+    [ -d "$home" ] && [ ! -L "$home" ] || continue
+    for cache in "$home/.cache" "$home/.npm" "$home/.yarn" "$home/.local/share/pnpm" "$home/go/pkg" "$home/.cargo/registry" "$home/.m2/repository" "$home/.gradle/caches" "$home/.nuget/packages"; do
+      if [ -d "$cache" ] && [ ! -L "$cache" ]; then
+        "$FIND" "$cache" -xdev -mindepth 1 -maxdepth 1 -exec "$RM" -rf --one-file-system -- {} +
+      fi
+    done
+  done
+}
+
+# fail_if_any_container_remains makes a leftover running service container a
+# capacity fault. A clean next generation must never inherit it, and this
+# boundary intentionally fails instead of stopping an unclassified process.
+fail_if_any_container_remains() {
+  if [ -n "$("$DOCKER" ps -aq)" ]; then
+    printf '%s\n' "civm-generation-boundary: Docker containers remain after cleanup" >&2
+    exit 1
+  fi
+}
+
+[ "$#" -eq 1 ] || die "expected exactly one of --check|prepare|resume|warn-clean"
+
+case "$1" in
+  --check)
+    require_capability
+    printf '%s\n' "$MARKER"
+    ;;
+  prepare)
+    require_capability
+    "$CIVMCTL" maintenance enter --execute --strict --timeout=120
+    "$CIVMCTL" idle-check
+    "$CIVMCTL" cleanup --execute --managed-volumes
+    "$CIVMCTL" idle-check
+    clean_runner_state
+    clean_home_caches
+    "$JOURNALCTL" --vacuum-size=50M >/dev/null 2>&1
+    "$DOCKER" system prune -af --volumes >/dev/null 2>&1
+    "$DOCKER" builder prune -af >/dev/null 2>&1
+    fail_if_any_container_remains
+    "$FSTRIM" -av >/dev/null 2>&1
+    exec "$SYSTEMCTL" poweroff --no-block
+    ;;
+  resume)
+    require_capability
+    "$CIVMCTL" maintenance exit --execute --timeout=120
+    exec "$CIVMCTL" idle-check
+    ;;
+  warn-clean)
+    require_capability
+    "$DOCKER" builder prune -af >/dev/null 2>&1
+    exec "$FSTRIM" -av >/dev/null 2>&1
+    ;;
+  *)
+    die "expected exactly one of --check|prepare|resume|warn-clean"
+    ;;
+esac

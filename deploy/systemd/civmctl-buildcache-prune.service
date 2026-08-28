@@ -1,0 +1,22 @@
+[Unit]
+Description=civmctl CI artifact hygiene (build cache + finished-run service images)
+Documentation=https://github.com/emersonbusson/civm/blob/main/deploy/bin/civm-ci-artifact-prune.sh
+After=network-online.target
+ConditionPathExists=/usr/local/bin/civm-ci-artifact-prune.sh
+
+[Service]
+Type=oneshot
+# Reclama os artefatos efemeros que incham o disco da box (build cache nao-usado
+# + imagens de service de runs finalizadas), de forma BuildKit/container-safe e
+# SEM deferir ao docker-heavy-lock — fechando a lacuna do acumulo DENTRO de um
+# build pesado, que o disk-watchdog (hourly + early-return no heavy-lock) deixa
+# encher. A logica de seguranca (protege o runid ativo, rmi recusa in-use, nunca
+# toca imagem vendor) vive no script. flock -n evita sobreposicao com o tick
+# anterior; Nice/IO idle garantem que nunca dispute recurso com um build ativo.
+ExecStart=/usr/bin/flock -n /run/civmctl-buildcache-prune.lock /usr/local/bin/civm-ci-artifact-prune.sh
+User=root
+Nice=15
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=10min
