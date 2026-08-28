@@ -1,0 +1,22 @@
+[Unit]
+Description=civmctl run-reaper (fila shared: PRs fechados + SHAs supersedidos)
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/runreaper/
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/usr/local/bin/civmctl
+
+[Service]
+Type=oneshot
+# CIVM_REAPER_REPOS=owner/a,owner/b vem do EnvironmentFile (GH_TOKEN tambem).
+# Sem repos configurados o comando sai com exit!=0 e nao faz nada (fail-safe).
+EnvironmentFile=-/etc/civm/run-reaper.env
+ExecStart=/usr/bin/flock -n /run/civmctl-run-reaper.lock /usr/local/bin/civmctl reap-runs --execute --repos=${CIVM_REAPER_REPOS} --json
+# exit 1 cobre corridas benignas (run ja saiu de queued ao cancelar) e falhas
+# transitorias de listagem; detalhes vao no JSON pro journal. Nao flapar a unit.
+SuccessExitStatus=0 1
+User=root
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=2min

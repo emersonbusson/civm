@@ -1,0 +1,162 @@
+# acme-ci-router.yml.template — fallback workflow para acme
+#
+# Coexiste com go.yml e web.yml existentes. Não os modifica.
+# Adiciona um aggregator "Gates (civm fallback)" que sempre roda
+# em self-hosted, completando mesmo quando billing-hosted está bloqueado.
+#
+# Adoção:
+#   cp ~/codespace/civm/templates/acme-ci-router.yml.template \
+#      ~/codespace/acme/.github/workflows/ci-router.yml
+#
+# Branch protection: marcar "Gates (civm fallback)" como required
+# OU manter go.yml/web.yml required com este como informativo.
+#
+# Pré-req: runner civm-app online em other/acme (via
+# `civmctl runner add --repo=other/acme --short=acme --execute`).
+# Ver runbooks/PEER-ADOPTION-CHECKLIST.md.
+#
+# Seguranca: usar apenas para PR confiavel/same-repo. Evitar
+# pull_request_target e nao expor secrets a codigo de fork em self-hosted.
+
+name: CI Router (civm fallback)
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-router-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  ci-router:
+    name: CI Router
+    runs-on: [self-hosted, civm]
+    timeout-minutes: 5
+    outputs:
+      use_local: ${{ steps.decide.outputs.use_local }}
+      route_reason: ${{ steps.decide.outputs.route_reason }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide runner via civmctl billing-status
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set +e
+          if ! command -v civmctl >/dev/null 2>&1; then
+            echo "use_local=false" >> "$GITHUB_OUTPUT"
+            echo "route_reason=civmctl-not-installed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          civmctl billing-status --repo="${REPOSITORY}" --workflow=go.yml >/dev/null 2>&1
+          rc_go=$?
+          civmctl billing-status --repo="${REPOSITORY}" --workflow=web.yml >/dev/null 2>&1
+          rc_web=$?
+          # Se qualquer um dos dois workflows mostrar billing-block, ativar local
+          if [ "$rc_go" = "1" ] || [ "$rc_web" = "1" ]; then
+            echo "use_local=true" >> "$GITHUB_OUTPUT"
+            echo "route_reason=billing-blocked (go=$rc_go web=$rc_web)" >> "$GITHUB_OUTPUT"
+          else
+            echo "use_local=false" >> "$GITHUB_OUTPUT"
+            echo "route_reason=billing-ok (go=$rc_go web=$rc_web)" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Gates aggregator. Sempre roda em civm. Branch protection (opcional)
+  # pode marcar este check como required: "Gates (civm fallback)".
+  # Não substitui go.yml/web.yml; é informativo + guarantee de check verde
+  # quando billing-block ativa fallback.
+  gates-civm:
+    name: Gates (civm fallback)
+    needs: ci-router
+    runs-on: [self-hosted, civm]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show route decision
+        env:
+          USE_LOCAL: ${{ needs.ci-router.outputs.use_local }}
+          REASON: ${{ needs.ci-router.outputs.route_reason }}
+        run: |
+          echo "use_local=$USE_LOCAL"
+          echo "reason=$REASON"
+
+      - name: Tool parity smoke (Go + Node + Docker disponíveis)
+        run: |
+          go version
+          node --version
+          docker --version
+          gh --version | head -1
+
+      - name: Smoke microservices Go (vet only, no build)
+        # Substitua/expanda com builds reais conforme adotar gradualmente.
+        # Pattern matrix igual go.yml services job, mas leve.
+        run: |
+          # Check go.work existe (acme usa workspace mode)
+          if [ -f go.work ]; then
+            echo "go.work present, vetting local workspace modules..."
+            go work edit -json | node -e '
+              let input = "";
+              process.stdin.on("data", (chunk) => input += chunk);
+              process.stdin.on("end", () => {
+                const workspace = JSON.parse(input);
+                for (const entry of workspace.Use || []) {
+                  console.log(entry.DiskPath);
+                }
+              });
+            ' | while IFS= read -r mod; do
+              echo "--- $mod ---"
+              (cd "$mod" && go vet ./...)
+            done
+          else
+            echo "go.work absent, vetting root only"
+            go vet ./...
+          fi
+
+      - name: Smoke web (typecheck only)
+        run: |
+          if [ -d web ]; then
+            cd web
+            if [ -f package.json ]; then
+              # Use existing yarn lock (acme usa yarn 1.22.22)
+              yarn install --frozen-lockfile --prefer-offline
+              yarn typecheck
+            fi
+          fi
+
+      - name: Post civm fallback status to commit (cross-peer reporter)
+        # Demonstra padrao civmctl ci local-report. Util quando branch
+        # protection esperar check name fixo "civm fallback"
+        # mas o job aggregator nao for o source-of-truth do check
+        # (ex.: peer adota gradualmente sem mexer em branch protection).
+        # Posta status independente do conclusion do job (if: always()).
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          state="success"
+          if [ "${{ job.status }}" != "success" ]; then
+            state="failure"
+          fi
+          if ! command -v civmctl >/dev/null 2>&1; then
+            echo "civmctl not installed; skipping cross-peer status report"
+            exit 0
+          fi
+          civmctl ci local-report \
+            --repo="${{ github.repository }}" \
+            --sha="${{ github.sha }}" \
+            --state="$state" \
+            --context="civm fallback" \
+            --description="acme smoke + go vet multi-module + web typecheck on civm runner" \
+            --target-url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            || echo "ci local-report falhou (warning, gates ja decidiram)"

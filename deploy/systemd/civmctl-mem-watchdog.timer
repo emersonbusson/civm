@@ -1,0 +1,11 @@
+[Unit]
+Description=Trigger civmctl-mem-watchdog.service a cada 1min (monitoramento RAM near-real-time)
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/memwatchdog/
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+RandomizedDelaySec=5s
+
+[Install]
+WantedBy=timers.target

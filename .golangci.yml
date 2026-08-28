@@ -1,0 +1,50 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - prealloc
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    gosec:
+      # Justificativas:
+      # G204: civmctl orquestra apt/docker/systemctl com argumentos validados
+      #       via regexes em internal/civm — auditado por ValidateRepo,
+      #       ValidateShort, ValidateLabels, ValidateServiceUnit, etc.
+      # G304: paths vem de flags CLI auditadas (CleanDir) ou de glob
+      #       whitelisted em internal/hook (safeWorkRoot/safeRunnerDir).
+      # G115: aritmética de disco (uint64 -> int) com valores limitados
+      #       (percentuais 0-100, tamanhos de disco abaixo do range de int64).
+      excludes:
+        - G204
+        - G304
+        - G115
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    misspell:
+      ignore-rules:
+        # Vocabulário PT-BR usado em mensagens e comentários do civm.
+        - comando
+        - comandos
+        - exclusivos
+        - independente
+        - independentes
+        - inferir
+        - metricas
+        - operacional
+        - reinstale
+        - variante
+        - variantes

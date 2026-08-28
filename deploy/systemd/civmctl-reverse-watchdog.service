@@ -1,0 +1,17 @@
+[Unit]
+Description=civmctl reverse-watchdog (alerta se disk-watchdog parou)
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/reversewatchdog/
+After=network-online.target
+ConditionPathExists=/usr/local/bin/civmctl
+
+[Service]
+Type=oneshot
+# Exit 0 ok, 1 stale (alerta), 2 unknown. Aceitar 0/1/2 sem failure
+# do systemd unit (alerta vai pro journal; outro consumer le).
+ExecStart=/usr/local/bin/civmctl reverse-watchdog --max-age-hours=4
+SuccessExitStatus=0 1 2
+User=root
+Nice=15
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=2min

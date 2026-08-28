@@ -1,0 +1,11 @@
+[Unit]
+Description=Trigger civmctl-runner-watchdog.service a cada 2min
+Documentation=https://github.com/emersonbusson/civm/blob/main/docs/specs/civmctl/PRD.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target
