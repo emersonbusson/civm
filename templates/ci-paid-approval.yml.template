@@ -1,0 +1,154 @@
+# ci-paid-approval.yml.template — civm-first + paid GitHub-hosted approval
+#
+# Pattern:
+#   1. Run validation first on [self-hosted, civm].
+#   2. If repo variable ENABLE_PAID_GITHUB_HOSTED_CI == "true", verify that
+#      environment "paid-github-hosted-ci" has required reviewers and prevents
+#      self-review.
+#   3. Only after that preflight passes, schedule the paid ubuntu-latest job.
+#      The job references the protected environment, so GitHub pauses it for
+#      admin approval before it starts consuming GitHub-hosted minutes.
+#
+# Default state is safe: if ENABLE_PAID_GITHUB_HOSTED_CI is missing or false,
+# the paid job is skipped and no GitHub-hosted minutes are consumed.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CIVM_FORCE_LOCAL: "true"
+  GO_VERSION: "1.26"
+  NODE_VERSION: "24"
+
+jobs:
+  ci-router:
+    name: CI Router
+    runs-on: [self-hosted, civm]
+    outputs:
+      use_local: ${{ steps.decide.outputs.use_local }}
+      route_reason: ${{ steps.decide.outputs.route_reason }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide runner (forced local until paid approval is enabled)
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          if [ "${CIVM_FORCE_LOCAL:-false}" = "true" ]; then
+            echo "use_local=true" >> "$GITHUB_OUTPUT"
+            echo "route_reason=forced-local" >> "$GITHUB_OUTPUT"
+            echo "Routing: use_local=true reason=forced-local"
+            exit 0
+          fi
+          civmctl billing-status --repo="${GITHUB_REPOSITORY}" --workflow=ci.yml
+          code=$?
+          set -e
+          case "$code" in
+            0) use_local=false; reason="billing-ok" ;;
+            1) use_local=true;  reason="billing-blocked" ;;
+            2) use_local=false; reason="billing-unknown-default-remote" ;;
+            *) use_local=false; reason="detector-error-$code" ;;
+          esac
+          echo "use_local=$use_local" >> "$GITHUB_OUTPUT"
+          echo "route_reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "Routing: use_local=$use_local reason=$reason"
+
+  validate-civm:
+    name: Validate (civm)
+    needs: ci-router
+    runs-on: [self-hosted, civm]
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "PLACEHOLDER — substituir pelos gates reais do projeto"
+
+  paid-ci-preflight:
+    name: Paid CI Preflight
+    needs: validate-civm
+    if: ${{ vars.ENABLE_PAID_GITHUB_HOSTED_CI == 'true' }}
+    runs-on: [self-hosted, civm]
+    steps:
+      - name: Verify protected paid CI environment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          env_json="$(gh api "repos/${GITHUB_REPOSITORY}/environments/paid-github-hosted-ci")"
+          echo "$env_json" | jq -e '
+            .protection_rules[]?
+            | select(.type == "required_reviewers")
+            | select(.prevent_self_review == true)
+            | select((.reviewers // []) | length > 0)
+          ' >/dev/null || {
+            echo "::error::Environment paid-github-hosted-ci must require reviewers and prevent self-review before paid CI can run."
+            exit 1
+          }
+
+  paid-validate:
+    name: Validate (github-hosted)
+    needs: [validate-civm, paid-ci-preflight]
+    if: ${{ vars.ENABLE_PAID_GITHUB_HOSTED_CI == 'true' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: paid-github-hosted-ci
+      deployment: false
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "PLACEHOLDER — mesmo gate do validate-civm, rodando em ubuntu-latest"
+
+  gates:
+    name: Gates (typecheck, test, build, invariants)
+    needs: [ci-router, validate-civm, paid-ci-preflight, paid-validate]
+    if: always()
+    runs-on: [self-hosted, civm]
+    steps:
+      - name: Aggregate
+        env:
+          ROUTER: ${{ needs.ci-router.result }}
+          CIVM_VALIDATE: ${{ needs.validate-civm.result }}
+          PAID_PREFLIGHT: ${{ needs.paid-ci-preflight.result }}
+          PAID_VALIDATE: ${{ needs.paid-validate.result }}
+          PAID_CI_ENABLED: ${{ vars.ENABLE_PAID_GITHUB_HOSTED_CI == 'true' }}
+          USE_LOCAL: ${{ needs.ci-router.outputs.use_local }}
+          REASON: ${{ needs.ci-router.outputs.route_reason }}
+        run: |
+          echo "Router:         $ROUTER (use_local=$USE_LOCAL, reason=$REASON)"
+          echo "Validate civm:  $CIVM_VALIDATE"
+          echo "Paid enabled:   $PAID_CI_ENABLED"
+          echo "Paid preflight: $PAID_PREFLIGHT"
+          echo "Paid validate:  $PAID_VALIDATE"
+          if [ "$ROUTER" != "success" ]; then
+            echo "::error::ci-router did not succeed"
+            exit 1
+          fi
+          if [ "$CIVM_VALIDATE" != "success" ]; then
+            echo "::error::validate-civm failed"
+            exit 1
+          fi
+          if [ "$PAID_CI_ENABLED" = "true" ]; then
+            if [ "$PAID_PREFLIGHT" != "success" ]; then
+              echo "::error::paid CI preflight failed"
+              exit 1
+            fi
+            if [ "$PAID_VALIDATE" != "success" ]; then
+              echo "::error::paid GitHub-hosted validation failed"
+              exit 1
+            fi
+          fi
+          echo "::notice::Gates passed (paid_ci_enabled=$PAID_CI_ENABLED)"

@@ -1,0 +1,33 @@
+[Unit]
+# Sobe o registry pull-through cache (:5000) que faz o setup-registry-cache.sh
+# provisionar. O porquê: o Docker Hub rate-limita pulls anônimos (100/6h/IP) e o
+# mirror.gcr.io só espelha imagens `library/` — sob carga do runner compartilhado
+# os pulls de minio/clamav/evoapicloud falham e o `compose up --build` morre antes
+# de começar (a falha "No such image de largada" da CI). O setup-registry-cache.sh
+# já existia e o daemon.json já apontava :5000 como mirror, mas NÃO havia unit que
+# subisse o cache no boot: o registry só existia se alguém rodasse o script à mão.
+# Esta unit fecha esse gap (CIVM-2). oneshot + RemainAfterExit porque o script é
+# idempotente e o container do registry usa restart=always (a unit só garante que
+# o estado foi reconciliado uma vez por boot, depois o Docker mantém vivo).
+Description=civmctl registry pull-through cache (:5000 mirror do docker.io)
+Documentation=https://github.com/emersonbusson/civm/blob/main/deploy/bin/setup-registry-cache.sh
+# Dep do docker e' `Wants=` (fraca), nao `Requires=`: o setup-registry-cache.sh
+# reinicia o docker se o daemon.json divergir (guard cmp -s), e um restart do
+# docker disparado de dentro do proprio ExecStart nao deve enfileirar um stop-job
+# desta unit. network-online porque o warm puxa registry:2 do Docker Hub.
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+ConditionPathExists=/usr/local/bin/setup-registry-cache.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/setup-registry-cache.sh
+StandardOutput=journal
+StandardError=journal
+# O warm inicial pode puxar registry:2 do Docker Hub; 10min cobre disco lento sem
+# travar o boot indefinidamente.
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target

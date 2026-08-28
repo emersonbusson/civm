@@ -1,0 +1,150 @@
+#!/bin/sh
+# civm-safedelete — root-side validated wrapper for the civm runner _work cleanup
+# escalation (docs/specs/civm-runner-reliability, DT-v2-1/3/5/7/8).
+#
+# This is the ONLY binary sudo whitelists (deploy/sudoers.d/civm-cleanup). The
+# Go caller (internal/safedelete) already validates and guards the path, but the
+# whole point of a wrapper instead of NOPASSWD on raw chown/rm is that the path
+# is RE-VALIDATED here, in-process, on the root side, before any privileged
+# action. Two independent layers (Go caller + this wrapper) restore the "guard
+# duplo" the PRD requires: a single regression in the Go guard does not become an
+# unrestricted root delete primitive.
+#
+# Contract (mirrors the Go validateFixed + safeWorkRoot + EvalSymlinks):
+#   civm-safedelete chown <uid>:<gid> [--] <path>
+#   civm-safedelete rm [--] <path>
+#   civm-safedelete --check          (no-op capability probe, exit 0)
+#
+# The "--" before <path> is accepted but optional: the internal/safedelete Go
+# caller invokes the wrapper without it, while a human/operator following the
+# SPECv2 usage may pass it. EITHER way the wrapper ALWAYS places "--" before the
+# path when it execs the absolute coreutil (DT-v2-8) — that is the load-bearing
+# guarantee, independent of how the wrapper itself was called.
+#
+# The path must be absolute, contain no NUL, NOT be "/", NOT $HOME/root home,
+# NOT a bare /home/<user>, and MUST resolve (realpath -e) to a real path under a
+# runner _work tree: /home/*/actions-runner*/_work/ or /srv/ci/actions-runner*/_work/.
+# Anything else is rejected with a non-zero exit and NO action.
+#
+# Hardcoded absolute coreutils remove the /usr/bin vs /bin secure_path ambiguity
+# (the CRITICAL DT-v2-1 blocker). Always "--" before the path. No eval, no word
+# splitting of the path (always quoted "$path").
+
+set -eu
+
+# Absolute coreutils — never bare names. This is the whole point of DT-v2-1.
+CHOWN=/usr/bin/chown
+RM=/usr/bin/rm
+REALPATH=/usr/bin/realpath
+
+die() {
+	# Errors go to stderr; never echo the path back in a way that could be
+	# mistaken for success. Exit non-zero so the caller treats it as a refusal.
+	echo "civm-safedelete: $1" >&2
+	exit 1
+}
+
+# validate_path re-runs the full path contract on the root side. It echoes the
+# realpath-resolved target on success and dies (non-zero, no action) otherwise.
+validate_path() {
+	_p=$1
+
+	# Non-empty.
+	[ -n "$_p" ] || die "empty path"
+
+	# No NUL: a NUL would have truncated the argument already, but reject any
+	# control character defensively. A real _work path never contains them.
+	case $_p in
+	*[![:print:]]*) die "path contains non-printable byte" ;;
+	esac
+
+	# Absolute.
+	case $_p in
+	/*) : ;;
+	*) die "path not absolute: $_p" ;;
+	esac
+
+	# Never "/".
+	[ "$_p" != "/" ] || die "refusing to delete root"
+
+	# Never $HOME / root home.
+	if [ -n "${HOME:-}" ] && [ "$_p" = "$HOME" ]; then
+		die "refusing to delete \$HOME: $_p"
+	fi
+	[ "$_p" != "/root" ] || die "refusing to delete root home: $_p"
+
+	# Never a bare /home/<user> (exactly two segments under root).
+	case $_p in
+	/home/*/*) : ;; # at least /home/<user>/<something> — fall through
+	/home/*) die "refusing to delete a bare home dir: $_p" ;;
+	esac
+
+	# Resolve symlinks and require the target to EXIST (realpath -e). A symlink
+	# that escapes the _work tree resolves to its real target here and is then
+	# re-checked against the prefix below, so an escaping link is rejected.
+	_real=$("$REALPATH" -e -- "$_p") || die "cannot resolve (realpath -e): $_p"
+
+	# Re-affirm the resolved real path is under a real runner _work tree. This is
+	# the same prefix contract as safeWorkRoot on the Go side.
+	case $_real in
+	/home/*/actions-runner*/_work/*) : ;;
+	/home/*/actions-runner*/_work) : ;;
+	/srv/ci/actions-runner*/_work/*) : ;;
+	/srv/ci/actions-runner*/_work) : ;;
+	*) die "resolved target escapes a runner _work tree: $_real" ;;
+	esac
+
+	# Guard against "/.." style traversal surviving realpath (it should not, but
+	# fail closed). realpath -e already canonicalized, so a literal ".." here is
+	# a hard refusal.
+	case $_real in
+	*/../* | */.. | ../*) die "resolved target contains ..: $_real" ;;
+	esac
+
+	printf '%s' "$_real"
+}
+
+# Sub-command dispatch. Each privileged exec hardcodes the absolute coreutil and
+# places "--" before the (quoted) resolved path.
+cmd=${1:-}
+
+case $cmd in
+--check)
+	# Capability probe used by sudo -n civm-safedelete --check and the doctor
+	# self-check (DT-v2-10). No-op, no privilege exercised, exit 0.
+	exit 0
+	;;
+chown)
+	[ $# -ge 3 ] || die "usage: civm-safedelete chown <uid>:<gid> [--] <path>"
+	uidgid=$2
+	# uid:gid must be strictly numeric:numeric (the Go caller builds it from
+	# os.Getuid()); never pass through a name that could shell out.
+	case $uidgid in
+	*[!0-9:]* | "" | :* | *: | *:*:*) die "invalid uid:gid: $uidgid" ;;
+	esac
+	# Accept an optional "--" before the path (SPECv2 usage); the Go caller omits
+	# it. Either way the path is the final argument.
+	if [ "$3" = "--" ]; then
+		[ $# -ge 4 ] || die "usage: civm-safedelete chown <uid>:<gid> -- <path>"
+		path=$4
+	else
+		path=$3
+	fi
+	real=$(validate_path "$path")
+	exec "$CHOWN" -R "$uidgid" -- "$real"
+	;;
+rm)
+	[ $# -ge 2 ] || die "usage: civm-safedelete rm [--] <path>"
+	if [ "$2" = "--" ]; then
+		[ $# -ge 3 ] || die "usage: civm-safedelete rm -- <path>"
+		path=$3
+	else
+		path=$2
+	fi
+	real=$(validate_path "$path")
+	exec "$RM" -rf --one-file-system -- "$real"
+	;;
+*)
+	die "unknown sub-command: ${cmd:-<none>} (expected chown|rm|--check)"
+	;;
+esac

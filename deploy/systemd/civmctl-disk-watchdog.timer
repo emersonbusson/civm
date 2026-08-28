@@ -1,0 +1,11 @@
+[Unit]
+Description=Trigger civmctl-disk-watchdog.service hora em hora
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/diskwatchdog/
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

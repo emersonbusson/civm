@@ -1,0 +1,18 @@
+[Unit]
+Description=civmctl runner watchdog (auto-repair do GitHub Actions runner)
+Documentation=https://github.com/emersonbusson/civm/blob/main/docs/specs/civmctl/PRD.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/usr/local/bin/civmctl
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/civmctl-runner-watchdog.lock /usr/local/bin/civmctl runner watchdog --execute --repos=auto --json
+User=root
+EnvironmentFile=-/etc/civm/runner-watchdog.env
+EnvironmentFile=-/etc/civm/run-reaper.env
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=2min
