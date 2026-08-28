@@ -1,0 +1,17 @@
+[Unit]
+Description=civmctl mem-watchdog (monitora pressao de RAM/swap em tempo real)
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/memwatchdog/
+ConditionPathExists=/usr/local/bin/civmctl
+
+[Service]
+Type=oneshot
+# Registra uma linha JSON por tick no journal (historico consultavel) e
+# classifica a pressao. Exit 0=ok 1=warn 2=critical; nenhum e falha da unit
+# (sinal vai pro journal pra um consumidor/alerta ler). Ler /proc/meminfo
+# nao exige privilegio.
+ExecStart=/usr/local/bin/civmctl mem-watchdog --json
+SuccessExitStatus=0 1 2
+Nice=15
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30s

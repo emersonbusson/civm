@@ -1,0 +1,410 @@
+name: CI
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.filter.outputs.full }}
+      docs: ${{ steps.filter.outputs.docs }}
+      pr_full: ${{ steps.filter.outputs.pr_full }}
+      pr_docs: ${{ steps.filter.outputs.pr_docs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect current and PR changes
+        id: filter
+        run: node tools/ci/detect-changes.mjs full docs
+
+  validate-templates:
+    name: Validate templates and runbooks
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: YAML lint templates
+        run: |
+          # Templates *.yml.template usam syntax YAML valido por convencao.
+          for f in templates/*.yml.template; do
+            python3 -c "import yaml; yaml.safe_load(open('$f'))" || exit 1
+          done
+          # Workflow do proprio civm
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
+          # systemd unit files (basico: existe e nao vazio)
+          [ -s deploy/systemd/civmctl-cleanup.service ] || exit 1
+          [ -s deploy/systemd/civmctl-cleanup.timer ] || exit 1
+
+      - name: Markdown links basico
+        run: |
+          # Confere que arquivos referenciados nos READMEs existem.
+          missing=0
+          while IFS= read -r line; do
+            base=$(printf '%s' "$line" | cut -d: -f1)
+            dir=$(dirname "$base")
+            while IFS= read -r link; do
+              [ -n "$link" ] || continue
+              file="${link#](}"
+              file="${file%)}"
+              case "$file" in
+                http*|/*) continue ;;
+              esac
+              target_file="${file%%#*}"
+              target_file="${target_file%%\?*}"
+              target="$dir/$target_file"
+              if [ ! -e "$target" ]; then
+                echo "broken: $base -> $file"
+                missing=$((missing + 1))
+              fi
+            done < <(printf '%s\n' "$line" | grep -oE '\]\(\.[^)]+\)' || true)
+          done < <(grep -rn '\](\.' README.md AGENTS.md CODEX.md runbooks/ disciplines/ rules/ templates/ 2>/dev/null || true)
+          if [ "$missing" -gt 0 ]; then
+            echo "Found $missing broken local links"
+            exit 1
+          fi
+          echo "All local links OK"
+
+      - name: Communication style template integrity
+        run: |
+          if ! grep -q "<!-- COMMUNICATION-STYLE:BEGIN -->" templates/COMMUNICATION-STYLE.md; then
+            echo "BEGIN marker missing"
+            exit 1
+          fi
+          if ! grep -q "<!-- COMMUNICATION-STYLE:END -->" templates/COMMUNICATION-STYLE.md; then
+            echo "END marker missing"
+            exit 1
+          fi
+          # Mesmos marcadores em AGENTS.md e CODEX.md
+          for f in AGENTS.md CODEX.md; do
+            if ! grep -q "<!-- COMMUNICATION-STYLE:BEGIN -->" "$f"; then
+              echo "$f sem marker BEGIN"
+              exit 1
+            fi
+          done
+          echo "Markers OK"
+
+  build-civmctl:
+    name: Build + test civmctl
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # full history for gitleaks
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.5"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.1
+          golangci-lint run ./...
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+
+      - name: Secret pattern scan
+        run: |
+          # High-confidence secret shapes (defense in depth with gitleaks below).
+          # False positives must be fixed by redaction, not by weakening the pattern.
+          if grep -RInE --exclude-dir=.git \
+            'ghp_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9_]{20,}|ghu_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9_]{20,}|ghr_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}' \
+            .; then
+            exit 1
+          fi
+          if grep -RInE --exclude-dir=.git -- '-----BEGIN (OPENSSH|RSA|EC|DSA) PRIVATE KEY-----' . \
+            | grep -v '`-----BEGIN' \
+            | grep -v '.github/workflows/ci.yml:' \
+            | grep -v 'runbooks/CI-GITHUB-APP-SETUP.md:'; then
+            exit 1
+          fi
+
+      - name: Gitleaks (tree + git history)
+        # Use the open-source CLI directly (gitleaks-action requires a paid
+        # GITLEAKS_LICENSE on organization repos).
+        run: |
+          set -euo pipefail
+          ver=v8.24.0
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${ver}/gitleaks_${ver#v}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          /tmp/gitleaks version
+          # Working tree (no .git needed)
+          /tmp/gitleaks detect --source . --no-git --redact --exit-code 1
+          # Full git history (shallow clone is enough for PR tip; full history on push)
+          /tmp/gitleaks detect --source . --redact --exit-code 1 --log-opts="--all"
+
+      - name: go test (race + cover)
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Coverage threshold (>=80% no internal/**)
+        run: |
+          go test -count=1 -cover ./internal/... | tee coverage-packages.txt
+          fail=0
+          while IFS= read -r pkg; do
+            line=$(grep -E "^ok[[:space:]]+${pkg}[[:space:]]+" coverage-packages.txt || true)
+            if [ -z "$line" ]; then
+              echo "MISSING COVERAGE: $pkg"
+              fail=1
+              continue
+            fi
+            pct=$(printf '%s' "$line" | sed -E 's/.*coverage: ([0-9.]+)%.*/\1/')
+            awk -v pct="$pct" -v pkg="$pkg" 'BEGIN {
+              if (pct + 0 < 80) {
+                printf "BELOW 80%%: %s (%s%%)\n", pkg, pct
+                exit 1
+              }
+            }' || fail=1
+          done < <(go list ./internal/...)
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: go build
+        run: |
+          go build -ldflags='-s -w' -o /tmp/civmctl ./cmd/civmctl
+          ls -la /tmp/civmctl
+          size=$(stat -c%s /tmp/civmctl)
+          echo "Binario: $size bytes"
+          # PRD §RNF-3: <10MB stripped
+          if [ "$size" -gt 10485760 ]; then
+            echo "Binario excede 10MB (RNF-3): $size"
+            exit 1
+          fi
+
+      - name: Smoke tests (read-only commands)
+        run: |
+          /tmp/civmctl --help > /dev/null
+          /tmp/civmctl version-pins > /dev/null
+          /tmp/civmctl version-pins --json > /dev/null
+          # health pode retornar exit 1 se algum check operacional estiver em warn
+          /tmp/civmctl health || true
+          # cleanup --dry-run em path vazio nao deve mutar nada
+          /tmp/civmctl cleanup --dry-run --no-docker --no-apt --tmp-dir=/tmp --work-dir=/tmp > /dev/null
+
+  windows-gate-safety:
+    name: Windows gate junction safety
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Exercise official and adversarial junctions
+        shell: powershell
+        run: .\scripts\tests\gate-runner-junction-safety.test.ps1
+
+  self-hosted-smoke:
+    name: Self-hosted runner smoke (civm)
+    needs: changes
+    # Optional lab gate: set repository variable CIVM_SELF_HOSTED_SMOKE=true
+    # and register a runner with labels self-hosted,civm. Default off for
+    # public GitHub-hosted free CI. Paid and fork contexts must never reach a
+    # persistent self-hosted runner, even when the opt-in is enabled.
+    if: >-
+      needs.changes.outputs.full == 'true' &&
+      vars.CIVM_SELF_HOSTED_SMOKE == 'true' && vars.CI_BACKEND != 'paid' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, civm]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show runner identity
+        run: |
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "RUNNER_ARCH=$RUNNER_ARCH"
+          uname -a
+          cat /etc/os-release | head -3
+
+      - name: Tool parity check (vs ubuntu-latest)
+        run: |
+          echo "--- versions on self-hosted runner ---"
+          go version
+          node --version
+          docker --version
+          gh --version | head -1
+          git --version
+          jq --version
+          go build -o /tmp/civmctl-parity ./cmd/civmctl
+          /tmp/civmctl-parity parity
+          rm -f /tmp/civmctl-parity
+          echo "--- /opt/hostedtoolcache writable? ---"
+          test -d /opt/hostedtoolcache && echo "exists" || echo "missing (setup-* will create)"
+
+      - name: civmctl installed system-wide
+        run: |
+          which civmctl
+          civmctl version-pins | head -5
+          civmctl drift --timeout=15 || true
+          # billing-status: zero-PAT, usa GITHUB_TOKEN auto
+          # exit 0=ok, 1=blocked, 2=unknown — aceitar todos no smoke
+          civmctl billing-status --repo="${GITHUB_REPOSITORY}" --workflow=ci.yml --timeout=15 || true
+
+      - name: civmctl health on self
+        run: |
+          set -euo pipefail
+          ec=0
+          health_json="$(mktemp)"
+          civmctl health --work-dir="$GITHUB_WORKSPACE" --json | tee "$health_json" || ec=$?
+          echo "exit=$ec"
+          if [ "$ec" -le 1 ]; then
+            exit 0
+          fi
+
+          if node - "$health_json" <<'NODE'
+          const fs = require('node:fs')
+
+          const toleratedMissingTimers = new Set(['TIMER_CLEANUP', 'TIMER_DISK'])
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+          const critical = (report.checks ?? []).filter((check) => check.status === 'CRIT')
+          const criticalNames = critical.map((check) => check.name).join(', ')
+          const tolerated =
+            critical.length > 0 &&
+            critical.every(
+              (check) =>
+                toleratedMissingTimers.has(check.name) &&
+                check.detail.includes(' missing: ')
+            )
+
+          if (!tolerated) {
+            console.error(`non-tolerated critical health checks: ${criticalNames}`)
+            process.exit(1)
+          }
+
+          console.log(`tolerated critical health checks: ${criticalNames}`)
+          NODE
+          then
+            echo "::warning::civmctl health critical only because bootstrap-required systemd timers are missing"
+            echo "::warning::remediation: sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute"
+            exit 0
+          fi
+
+          echo "civmctl health critical (exit $ec)"
+          exit 1
+
+      - name: Build civmctl from source on self-hosted (parity test)
+        run: |
+          go build -o /tmp/civmctl-fresh ./cmd/civmctl
+          /tmp/civmctl-fresh --help > /dev/null
+          /tmp/civmctl-fresh version-pins | head -5
+          rm -f /tmp/civmctl-fresh
+
+      - name: Privileged cleanup escalation (integration gate)
+        # safedelete exists to remove root-owned Docker leftovers from _work. A
+        # hermetic unit test can encode the WRONG assumption and still pass —
+        # #59 shipped a test asserting root-owned targets were REFUSED, the exact
+        # opposite of the tool's purpose (DT-v2-20). This step exercises the real
+        # ownership decision against a REAL root-owned fixture on this runner, so
+        # an existence probe (`civm-safedelete --check`) can never again stand in
+        # for "does it actually do its job". Self-skips without passwordless sudo,
+        # so it is a real gate on the self-hosted runner and a no-op on forks.
+        run: go test -tags=integration -run TestIntegration -v ./internal/safedelete/
+
+      - name: Workspace cleanup (persistent runner hygiene)
+        if: always()
+        run: |
+          # Runner persistente: checkout recria a workspace e os timers civm
+          # fazem a higiene operacional fora do caminho quente do job.
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE" | head -5
+
+  ci:
+    name: CI
+    needs: [changes, validate-templates, build-civmctl, self-hosted-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate
+        env:
+          CURRENT_FULL: ${{ needs.changes.outputs.full }}
+          CURRENT_DOCS: ${{ needs.changes.outputs.docs }}
+          PR_FULL: ${{ needs.changes.outputs.pr_full }}
+          PR_DOCS: ${{ needs.changes.outputs.pr_docs }}
+          VALIDATE_TEMPLATES_RESULT: ${{ needs.validate-templates.result }}
+          BUILD_RESULT: ${{ needs.build-civmctl.result }}
+          SMOKE_RESULT: ${{ needs.self-hosted-smoke.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PREVIOUS_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          require_success() {
+            if [ "$2" != "success" ]; then
+              echo "::error::$1 concluded $2"
+              exit 1
+            fi
+          }
+
+          wait_for_previous_gate() {
+            ok=false
+            for _ in $(seq 1 90); do
+              status_line="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${PREVIOUS_SHA}/check-runs?per_page=100" \
+                --jq '.check_runs | map(select(.name == "CI" or .name == "Build + test civmctl")) | sort_by(.started_at // .completed_at // .created_at) | last // {} | [.status // "", .conclusion // "", .html_url // ""] | @tsv' 2>/dev/null || true)"
+              status="$(printf '%s' "$status_line" | awk -F '\t' '{print $1}')"
+              conclusion="$(printf '%s' "$status_line" | awk -F '\t' '{print $2}')"
+              url="$(printf '%s' "$status_line" | awk -F '\t' '{print $3}')"
+              if [ "$status" = "completed" ] && [ "$conclusion" = "success" ]; then
+                echo "::notice::Previous full CI gate succeeded: $url"
+                ok=true
+                break
+              fi
+              if [ "$status" = "completed" ] && [ -n "$conclusion" ] && [ "$conclusion" != "success" ]; then
+                echo "::error::Previous full CI gate did not succeed: conclusion=$conclusion $url"
+                exit 1
+              fi
+              sleep 10
+            done
+            if [ "$ok" != "true" ]; then
+              echo "::error::Previous full CI gate did not finish successfully before timeout"
+              exit 1
+            fi
+          }
+
+          if [ "$CURRENT_DOCS" = "true" ] || [ "$CURRENT_FULL" = "true" ]; then
+            require_success validate-templates "$VALIDATE_TEMPLATES_RESULT"
+          fi
+
+          if [ "$CURRENT_FULL" != "true" ]; then
+            if [ "$PR_FULL" = "true" ] && [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "synchronize" ] && [ -n "$PREVIOUS_SHA" ]; then
+              wait_for_previous_gate
+              exit 0
+            fi
+            if [ "$PR_FULL" = "true" ]; then
+              echo "::error::PR has civmctl changes, but current build did not run and no previous check can be verified."
+              exit 1
+            fi
+            echo "::notice::Docs-only/no-op CI passed."
+            exit 0
+          fi
+
+          require_success build-civmctl "$BUILD_RESULT"
+          # Optional lab job: only enforce when it actually ran (not skipped).
+          if [ "$SMOKE_RESULT" != "skipped" ] && [ "$SMOKE_RESULT" != "" ]; then
+            require_success self-hosted-smoke "$SMOKE_RESULT"
+          fi
+          echo "::notice::CI passed."

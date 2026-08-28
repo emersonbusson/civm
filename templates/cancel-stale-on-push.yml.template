@@ -1,0 +1,86 @@
+# cancel-stale-on-push.yml.template — cancela runs de SHAs supersedidos no PR
+#
+# Quando um PR recebe um novo push (synchronize), o head avanca mas os runs do
+# SHA antigo ficam em queued/in_progress. Com concurrency group=run_id (box
+# civm: 1 runner, sem cancel-in-progress cross-push), esses runs envelhecem
+# na fila e atrasam o head atual.
+#
+# Este workflow force-cancela na hora todo run da branch cujo head_sha != tip
+# atual do PR. Complementa:
+#   - cancel-on-pr-close (PR fechado)
+#   - civmctl reap-runs (rede de seguranca periodica; agora tambem reaps
+#     superseded-sha em PR aberto)
+#
+# Roda em ubuntu-latest DE PROPOSITO: o cancelador nao pode depender do
+# runner self-hosted civm (senao enfileira atras dos jobs que tenta matar).
+#
+# Para adotar:
+#   1. Copiar para .github/workflows/cancel-stale-on-push.yml do peer repo
+#   2. Nada a configurar — usa GITHUB_TOKEN com actions: write
+#
+# Seguranca: so cancela runs da MESMA branch do PR com head_sha != tip.
+# Nunca toca push/main, schedule ou runs do tip atual.
+#
+# Rollback trigger: se cancelar run do tip atual, desabilitar o workflow e
+# depender so do reaper (gap <=5min).
+
+name: Cancel stale runs on PR push
+
+on:
+  pull_request:
+    types: [synchronize, opened, reopened]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cancel-stale-on-push-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    name: Force-cancel superseded runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Force-cancel non-head runs on this PR branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SELF: ${{ github.run_id }}
+        run: |
+          # best-effort: sem -e (falha de listagem nao aborta a limpeza).
+          set -uo pipefail
+          if [ -z "${BRANCH:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
+            echo "PR sem head ref/sha; nada a cancelar"
+            exit 0
+          fi
+          cancelled=0
+          # 'run_status' (nao 'status'): 'status' colide com special var read-only
+          # em alguns shells (zsh). Bash do Actions nao tem o problema, mas o nome
+          # intencional evita o foot-gun.
+          for run_status in queued in_progress; do
+            # -f/-F viram query params no GET (sem interpolar $BRANCH na URL).
+            ids="$(gh api --paginate "/repos/${REPO}/actions/runs" -X GET \
+              -f branch="${BRANCH}" -f status="${run_status}" -F per_page=100 \
+              --jq ".workflow_runs[]
+                | select(.id != ${SELF})
+                | select(.head_sha != null and .head_sha != \"\" and (.head_sha | ascii_downcase) != (\"${HEAD_SHA}\" | ascii_downcase))
+                | .id")"
+            for id in ${ids}; do
+              # force-cancel desaloja runs presos na fila do runner self-hosted
+              # (um cancel normal e aceito mas nao aplicado ate o runner pegar o
+              # job). Cai pro cancel normal se o GitHub recusar o force.
+              if gh api -X POST "/repos/${REPO}/actions/runs/${id}/force-cancel" --silent 2>/dev/null \
+                 || gh api -X POST "/repos/${REPO}/actions/runs/${id}/cancel" --silent 2>/dev/null; then
+                echo "cancelled run ${id} (${run_status}, not head ${HEAD_SHA:0:12})"
+                cancelled=$((cancelled + 1))
+              else
+                echo "skip run ${id} (${run_status}): ja terminal ou sem permissao"
+              fi
+            done
+          done
+          echo "Total cancelado (superseded) para ${BRANCH}@${HEAD_SHA:0:12}: ${cancelled}"

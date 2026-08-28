@@ -1,0 +1,152 @@
+# ci-optimistic.yml.template — workflow Tier 3 sem detecao de billing.
+#
+# Padrao optimistic-retry: sempre tenta ubuntu-latest primeiro; se falhar
+# em <60s (sintoma de billing block ou erro de provisionamento), dispara
+# automaticamente a versao local em civm. Self-healing, zero auth.
+#
+# Quando usar este template em vez de ci.yml com ci-router:
+#   - Repositorio sem GITHUB_TOKEN auto-injetado (raro, mas possivel)
+#   - Quer simplicidade absoluta (zero detecao logic)
+#   - OK com 5-30s de "wasted" billing por run quando ubuntu-latest morre
+#     antes de iniciar (custo bem baixo na pratica)
+#
+# Quando NAO usar (preferir ci.yml com ci-router):
+#   - Quer minimizar consumo de minutos billing-able (detector e mais
+#     rapido em decidir pular ubuntu-latest quando ja sabemos que vai
+#     morrer)
+#   - Tem GITHUB_TOKEN funcionando e quer rota mais determinista
+#
+# Para adotar:
+#   1. Copiar este arquivo para .github/workflows/ci.yml no seu repo
+#   2. Substituir os steps de gates pelo conteudo real do seu CI
+#     (lint, test, build, etc) — nao copiar literalmente os "echo"
+#   3. Ajustar branch protection para exigir o check
+#     "Gates (typecheck, test, build, invariants)" como required
+#   4. Garantir que civm runner esta registrado e online (ver
+#      runbooks/MULTI-PROJECT-RUNNER.md)
+#
+# Seguranca: este template so deve rodar PR confiavel/same-repo em
+# self-hosted. Nao usar com forks nao confiaveis, pull_request_target
+# ou secrets expostos a codigo de PR externo.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+  GO_VERSION: '1.26'
+
+jobs:
+  # Tentativa primeira em ubuntu-latest. continue-on-error: true permite
+  # que o workflow nao morra aqui; gates-local entra como fallback se
+  # qualquer falha acontecer (incluindo billing block que mata o job em
+  # <10s antes de qualquer step executar).
+  gates-remote:
+    name: Gates (remote, ubuntu-latest)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      result: ${{ steps.flag.outputs.result }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      # SUBSTITUIR: gates reais do seu repo
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Test
+        run: npm test --if-present
+
+      - name: Build
+        run: npm run build --if-present
+
+      # Marca explicitamente que chegou ao fim com sucesso (steps anteriores
+      # com bash -e abortariam antes se algo quebrasse).
+      - name: Mark success
+        id: flag
+        run: echo "result=success" >> $GITHUB_OUTPUT
+
+  # Fallback em civm self-hosted. Roda se gates-remote nao concluiu
+  # success por qualquer motivo (billing block, transient error, code
+  # bug). Em billing block, gates-remote morre em ~5s sem step rodar;
+  # gates-local completa o trabalho.
+  gates-local:
+    name: Gates (local fallback, civm)
+    needs: gates-remote
+    if: needs.gates-remote.result != 'success'
+    runs-on: [self-hosted, civm]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      # SUBSTITUIR: mesmos gates do gates-remote
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Test
+        run: npm test --if-present
+
+      - name: Build
+        run: npm run build --if-present
+
+  # Aggregator: branch protection exige este nome. Sucesso se ANY um dos
+  # dois (remote ou local) passou. Falha apenas se ambos falharam.
+  gates:
+    name: Gates (typecheck, test, build, invariants)
+    needs: [gates-remote, gates-local]
+    if: always()
+    runs-on: [self-hosted, civm]
+    steps:
+      - name: Aggregate
+        env:
+          REMOTE: ${{ needs.gates-remote.result }}
+          LOCAL: ${{ needs.gates-local.result }}
+        run: |
+          echo "Remote: $REMOTE"
+          echo "Local:  $LOCAL"
+          if [ "$REMOTE" = "success" ]; then
+            echo "::notice::Gates passou em ubuntu-latest (rota normal)"
+            exit 0
+          fi
+          if [ "$LOCAL" = "success" ]; then
+            echo "::notice::Gates passou em civm (fallback ativado)"
+            exit 0
+          fi
+          echo "::error::Gates falhou em ambos os runners"
+          exit 1

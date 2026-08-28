@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "description": "Source-of-truth manifest for the Kahneman discipline pattern. Consumed by scripts/check-kahneman-consistency.sh and the kahneman-sync-audit workflow. Public/default tree only audits this repository; operators may extend the list locally for private fleets.",
+  "title_patterns": {
+    "canonical": "# Kahneman disciplines — hygiene para decisões de IA",
+    "peer_specific": "# Kahneman disciplines — higiene de decisão no peer",
+    "civm_template": "# Kahneman disciplines — template portátil de higiene de decisão"
+  },
+  "rule5_patterns": {
+    "en_canonical": "New lib needs explicit justification",
+    "pt_libraries": "Lib nova exige entrada em",
+    "pt_generic": "Lib nova exige justificativa explícita"
+  },
+  "framing_variants": [
+    "toda mudança neste repo",
+    "every change in this repo",
+    "every commit, PR, SPEC, milestone, and ADR"
+  ],
+  "surface_styles": {
+    "h2_top5": "Full §\"Decision hygiene (Kahneman)\" H2 section with 5 numbered rules + universal framing + doc link.",
+    "inline_bold": "Compact bold preamble paragraph above the first H2: **Decision hygiene (Kahneman) — always on, every change.** ... + universal framing + doc link. No separate Top-5 — those live in the linked CLAUDE.md."
+  },
+  "repos": [
+    {
+      "name": "civm",
+      "path": "civm",
+      "git_url": "https://github.com/emersonbusson/civm.git",
+      "doc_path": "disciplines/KAHNEMAN-DISCIPLINES.md",
+      "title": "civm_template",
+      "surfaces": [
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "pt_generic" }
+      ]
+    }
+  ]
+}

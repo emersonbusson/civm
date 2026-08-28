@@ -1,0 +1,58 @@
+name: Release
+
+# Dispara em cada push para main. release-please mantem um PR aberto
+# com bump de versao + CHANGELOG calculados a partir de Conventional
+# Commits desde a ultima tag. Mergear o PR cria a tag + release.
+#
+# Doc: runbooks/RELEASE-AUTOMATION.md
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  # Necessario apenas para fallback GITHUB_TOKEN/RELEASE_PLEASE_TOKEN.
+  # O caminho principal usa token efemero de GitHub App no step abaixo.
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    env:
+      # GitHub vai forçar Node.js 24 default em 2026-06-02; a action
+      # release-please-action@v4 ainda declara Node.js 20. Esse flag
+      # antecipa o runtime moderno e elimina o warning de deprecation
+      # sem aguardar release nova da action.
+      # Doc: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      HAS_RELEASE_APP: ${{ secrets.RELEASE_APP_ID != '' && secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+    steps:
+      - name: Create release GitHub App token
+        id: release-app-token
+        if: ${{ env.HAS_RELEASE_APP == 'true' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: civm
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-metadata: read
+
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
+        with:
+          # Ordem intencional: GitHub App dedicado, PAT legado,
+          # GITHUB_TOKEN apenas como contingencia operacional.
+          token: ${{ steps.release-app-token.outputs.token || secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

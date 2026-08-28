@@ -1,0 +1,15 @@
+[Unit]
+Description=civmctl disk-watchdog (cleanup agressivo se disk >DefaultPreCleanupPct)
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/diskwatchdog/
+After=network-online.target
+ConditionPathExists=/usr/local/bin/civmctl
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/civmctl-cleanup.lock /usr/local/bin/civmctl disk-watchdog --execute
+User=root
+Nice=15
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30min

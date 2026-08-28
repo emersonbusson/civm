@@ -1,0 +1,16 @@
+[Unit]
+Description=Trigger civmctl-buildcache-prune.service a cada 3min
+Documentation=https://github.com/emersonbusson/civm/blob/main/deploy/systemd/
+
+[Timer]
+# 3min: o build cache cresce ~1-2 GB/min num build pesado, entao 3min limita o
+# acumulo a ~3-6GB entre ticks (pico do guest ~85%, sob o hard-fail de 90%). Mais
+# frequente desperdicaria cache-hit cross-build; menos frequente deixa o disco
+# disparar. RandomizedDelaySec espalha os ticks dos varios runners da box.
+OnBootSec=3min
+OnUnitActiveSec=3min
+Persistent=true
+RandomizedDelaySec=20
+
+[Install]
+WantedBy=timers.target

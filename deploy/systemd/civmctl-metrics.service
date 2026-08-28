@@ -1,0 +1,14 @@
+[Unit]
+Description=civmctl metrics dump (prometheus textfile collector)
+Documentation=https://github.com/emersonbusson/civm/blob/main/runbooks/MULTI-PROJECT-RUNNER.md
+After=network-online.target
+ConditionPathExists=/usr/local/bin/civmctl
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom
+User=root
+Nice=10
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30s

@@ -1,0 +1,13 @@
+[Unit]
+Description=Trigger civmctl-reverse-watchdog 4-em-4h
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/reversewatchdog/
+
+[Timer]
+# 4-em-4h: alerta se disk-watchdog (que roda hourly) parar de disparar
+# por mais de 2-4h. Threshold em --max-age-hours=4 do service.
+OnCalendar=*-*-* 00,04,08,12,16,20:00:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
