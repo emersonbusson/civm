@@ -1,0 +1,136 @@
+# ci-router.yml.template — workflow Tier 1 (router pattern)
+#
+# Roda detector heuristico em civm self-hosted; decide entre
+# ubuntu-latest (GitHub-hosted, custa minutos) ou civm (mirror
+# sem custo). Aggregator final `Gates (typecheck, test, build,
+# invariants)` consolida resultado.
+#
+# Para adotar:
+#   1. Copiar este arquivo para .github/workflows/ci.yml do peer repo
+#   2. Substituir os steps PLACEHOLDER pelos gates reais do projeto
+#   3. Configurar branch protection: Gates (typecheck, test, build, invariants)
+#      como required; remover jobs individuais.
+#   4. Garantir que civm runner esta registrado e online (ver
+#      runbooks/MULTI-PROJECT-RUNNER.md)
+#
+# Comparar com ci-optimistic.yml.template (Tier 3 sem detector,
+# self-healing) que e mais simples mas consome 5-30s billing por run
+# quando ubuntu-latest morre rapido.
+#
+# Seguranca: self-hosted runner deve executar apenas PR confiavel/same-repo.
+# Evitar pull_request_target e nunca expor secrets a codigo de fork.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GO_VERSION: '1.26'
+  NODE_VERSION: '24'
+
+jobs:
+  ci-router:
+    name: CI Router
+    runs-on: [self-hosted, civm]
+    outputs:
+      use_local: ${{ steps.decide.outputs.use_local }}
+      route_reason: ${{ steps.decide.outputs.route_reason }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Decide runner (heuristic via gh run list)
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          civmctl billing-status --repo="${GITHUB_REPOSITORY}" --workflow=ci.yml
+          code=$?
+          set -e
+          case "$code" in
+            0) use_local=false; reason="billing-ok" ;;
+            1) use_local=true;  reason="billing-blocked" ;;
+            2) use_local=false; reason="billing-unknown-default-remote" ;;
+            *) use_local=false; reason="detector-error-$code" ;;
+          esac
+          echo "use_local=$use_local" >> "$GITHUB_OUTPUT"
+          echo "route_reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "Routing: use_local=$use_local reason=$reason"
+
+  # PLACEHOLDER — substituir pelos gates reais do projeto.
+  # Cada job aqui usa runs-on conditional via fromJSON.
+  lint:
+    name: Lint
+    needs: ci-router
+    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "PLACEHOLDER — substituir por lint real (eslint, golangci-lint, etc)"
+
+  test:
+    name: Test
+    needs: [ci-router, lint]
+    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "PLACEHOLDER — substituir por tests reais (go test, vitest, etc)"
+
+  build:
+    name: Build
+    needs: [ci-router, lint, test]
+    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "PLACEHOLDER — substituir por build real"
+
+  # Gates aggregator. Sempre roda em civm. Branch protection deve
+  # exigir este check name: "Gates (typecheck, test, build, invariants)"
+  gates:
+    name: Gates (typecheck, test, build, invariants)
+    needs: [ci-router, lint, test, build]
+    if: always()
+    runs-on: [self-hosted, civm]
+    steps:
+      - name: Aggregate
+        env:
+          ROUTER: ${{ needs.ci-router.result }}
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+          BUILD: ${{ needs.build.result }}
+          USE_LOCAL: ${{ needs.ci-router.outputs.use_local }}
+          REASON: ${{ needs.ci-router.outputs.route_reason }}
+        run: |
+          echo "Router: $ROUTER (use_local=$USE_LOCAL, reason=$REASON)"
+          echo "Lint:   $LINT"
+          echo "Test:   $TEST"
+          echo "Build:  $BUILD"
+          if [ "$ROUTER" != "success" ]; then
+            echo "::error::ci-router did not succeed"
+            exit 1
+          fi
+          for v in LINT TEST BUILD; do
+            r="${!v}"
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::$v failed"
+              exit 1
+            fi
+          done
+          echo "::notice::Gates passed (route=$([ "$USE_LOCAL" = "true" ] && echo civm || echo ubuntu-latest))"

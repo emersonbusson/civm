@@ -1,0 +1,108 @@
+name: kahneman-sync-audit
+
+# Audits the Kahneman discipline pattern across all peer repos declared in
+# disciplines/kahneman-sync-manifest.json. Fails if any repo drifts from its
+# declared style. Runs on a weekly cron + on every change to the manifest or
+# the audit tooling + manual dispatch.
+#
+# # Peer hydration is optional; default is ubuntu-latest for public CI.
+# repos from the manifest git_url fields when they are not already present.
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'   # Monday 12:00 UTC weekly sweep
+  push:
+    branches: [main]
+    paths:
+      - 'disciplines/kahneman-sync-manifest.json'
+      - 'scripts/check-kahneman-consistency.sh'
+      - '.github/workflows/kahneman-sync-audit.yml'
+  pull_request:
+    paths:
+      - 'disciplines/kahneman-sync-manifest.json'
+      - 'scripts/check-kahneman-consistency.sh'
+      - '.github/workflows/kahneman-sync-audit.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: kahneman-sync-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write   # only used on scheduled failure to open the tracking issue
+
+jobs:
+  audit:
+    name: Audit Kahneman pattern across peer repos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout civm
+        uses: actions/checkout@v7
+
+      - name: Make script executable
+        run: chmod +x scripts/check-kahneman-consistency.sh
+
+      - name: Prepare peer base
+        run: |
+          KAHNEMAN_BASE="$RUNNER_TEMP/kahneman-peers"
+          echo "KAHNEMAN_BASE=$KAHNEMAN_BASE" >> "$GITHUB_ENV"
+          rm -rf "$KAHNEMAN_BASE"
+          mkdir -p "$KAHNEMAN_BASE"
+          ln -s "$GITHUB_WORKSPACE" "$KAHNEMAN_BASE/civm"
+
+      - name: Validate manifest is valid JSON
+        run: jq -e . disciplines/kahneman-sync-manifest.json > /dev/null
+
+      - name: Run audit (human output, recorded in job log)
+        run: ./scripts/check-kahneman-consistency.sh --base "$KAHNEMAN_BASE" --sync-missing
+
+      - name: Run audit (JSON, stored as artifact for downstream tooling)
+        if: always()
+        run: ./scripts/check-kahneman-consistency.sh --base "$KAHNEMAN_BASE" --sync-missing --json > kahneman-audit.json || true
+
+      - name: Upload audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kahneman-audit-${{ github.run_id }}
+          path: kahneman-audit.json
+          retention-days: 90
+
+      - name: Open tracking issue on scheduled-run failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +'%Y-%m-%d')
+          TITLE="kahneman-sync-audit failure — $DATE"
+          # Avoid duplicate issues — only open if no open issue with same title exists.
+          if gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq 'length' \
+             | grep -qE '^[1-9]'; then
+            echo "Tracking issue already open, skipping."
+            exit 0
+          fi
+          if [ ! -f kahneman-audit.json ]; then
+            echo "::warning::kahneman-audit.json missing; opening minimal issue."
+            BODY=$(printf '## Resumo\n\nAuditoria falhou mas o JSON nao foi gerado. Ver job log em %s.\n' "$RUN_URL")
+          else
+            BODY=$(jq -r --arg run_url "$RUN_URL" '
+              "## Resumo\n\n" +
+              "Auditoria semanal do padrão Kahneman falhou. **\(.summary.fail) fail / \(.summary.warn) warn / \(.summary.ok) ok** entre os \(.summary.total) repos registrados.\n\n" +
+              "## Repos com problema\n\n" +
+              ([.repos[] | select(.status != "ok") |
+                "- **\(.name)** (\(.status))\n" +
+                (.reasons | map("  - \(.)") | join("\n"))]
+               | join("\n")) +
+              "\n\n## Rollback trigger\n\n" +
+              "Se nenhum dos repos listados pode ser realinhado em 7 dias, considerar relaxar o critério no manifest (`disciplines/kahneman-sync-manifest.json`) ou abrir issue secundário pra remover o repo do escopo.\n\n" +
+              "_Gerado por `.github/workflows/kahneman-sync-audit.yml` run \($run_url)._"
+            ' kahneman-audit.json)
+          fi
+          gh issue create \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --label "audit,area:governance"

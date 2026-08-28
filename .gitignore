@@ -1,0 +1,43 @@
+.DS_Store
+*.swp
+*.tmp
+.idea/
+.vscode/
+node_modules/
+*.log
+coverage.out
+
+# Secrets / local auth (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+**/hosts.yml
+.gh-token*
+gh-token*.txt
+
+# Operator / lab state — local only (agents append here; never publish)
+MEMORY.md
+validation.md
+
+# Product inventory of the runner VM (tracked when present)
+# vm.md is NOT ignored — document generic runner host facts for operators.
+
+register_all_runners.sh
+register_*_runners.sh
+scratch/
+.local/
+*.exe
+cmd/civmctl/civmctl
+
+# Host-only paths if ever copied into the workspace
+ProgramData/
+**/gh-token-*.txt
+**/.credentials
+**/.credentials_rsaparams

@@ -1,0 +1,60 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(git *)",
+      "Bash(go *)",
+      "Bash(make *)",
+      "Bash(gofmt *)",
+      "Bash(golangci-lint *)",
+      "Bash(civmctl *)",
+      "Bash(sudo civmctl *)",
+      "Bash(systemctl *)",
+      "Bash(sudo systemctl *)",
+      "Bash(journalctl *)",
+      "Bash(docker *)",
+      "Bash(docker compose *)",
+      "Bash(gh *)",
+      "Bash(ssh gha-ubuntu-2404 *)",
+      "Bash(ls *)",
+      "Bash(pwd)",
+      "Bash(which *)",
+      "Bash(chmod +x *)",
+      "Bash(sudo:*)",
+      "Bash(sudo.exe:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(pwsh.exe:*)",
+      "Bash(cmd.exe:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(chmod 777 *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null)/.claude/hooks/security-check.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null)/.claude/hooks/lint-on-write.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

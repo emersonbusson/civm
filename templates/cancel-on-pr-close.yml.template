@@ -1,0 +1,83 @@
+# cancel-on-pr-close.yml.template — cancela runs de PR fechado (event-driven)
+#
+# Quando um PR fecha (merge/close), seus runs em queued/in_progress NAO sao
+# cancelados pelo GitHub e ficam ocupando o runner self-hosted compartilhado.
+# Este workflow cancela na hora.
+#
+# Roda em ubuntu-latest DE PROPOSITO: o cancelador nao pode depender do runner
+# self-hosted civm que ele quer liberar (senao enfileira atras dos proprios
+# jobs que tenta matar). O job e minusculo (chamadas de API, ~15s billing).
+#
+# Defesa em camadas: complementa o reaper periodico do civm
+# (civmctl reap-runs, timer 5min) que e a rede de seguranca cross-repo. O
+# workflow da a latencia zero; o reaper cobre o que escapar (workflow falhou,
+# PR fechado antes do workflow existir, fork PR com token read-only).
+#
+# Para adotar:
+#   1. Copiar para .github/workflows/cancel-on-pr-close.yml do peer repo
+#   2. Nada a configurar — usa GITHUB_TOKEN com permissao actions: write
+#   3. (opcional) confirmar que o reaper do civm cobre o repo via
+#      CIVM_REAPER_REPOS em /etc/civm/run-reaper.env no host
+#
+# Seguranca: so cancela runs da branch do PR fechado (same-repo); fork PRs tem
+# GITHUB_TOKEN read-only e ficam por conta do reaper.
+#
+# Custo: ~0,3 min hosted por fechamento; tipicamente dentro do free tier de
+# Actions. Se quiser ZERO hosted, fique so com o reaper (gap <=5min).
+
+name: Cancel runs on PR close
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cancel-on-close-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cancel:
+    name: Force-cancel stale runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Force-cancel this PR's in-flight runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          SELF: ${{ github.run_id }}
+        run: |
+          # best-effort: sem -e (uma falha transitoria de listagem nao deve
+          # abortar a limpeza); cada cancel e tratado individualmente abaixo.
+          set -uo pipefail
+          if [ -z "${BRANCH:-}" ]; then
+            echo "PR sem head ref; nada a cancelar"
+            exit 0
+          fi
+          cancelled=0
+          # 'run_status' (nao 'status'): 'status' colide com special var
+          # read-only em alguns shells (zsh). O nome intencional evita o foot-gun.
+          for run_status in queued in_progress; do
+            # -f/-F viram query params no GET (sem interpolar $BRANCH na URL).
+            ids="$(gh api --paginate "/repos/${REPO}/actions/runs" -X GET \
+              -f branch="${BRANCH}" -f status="${run_status}" -F per_page=100 \
+              --jq ".workflow_runs[] | select(.id != ${SELF}) | .id")"
+            for id in ${ids}; do
+              # force-cancel desaloja runs presos na fila do runner self-hosted
+              # (um cancel normal e aceito mas nao aplicado ate o runner pegar o
+              # job). Cai pro cancel normal se o GitHub recusar o force.
+              if gh api -X POST "/repos/${REPO}/actions/runs/${id}/force-cancel" --silent 2>/dev/null \
+                 || gh api -X POST "/repos/${REPO}/actions/runs/${id}/cancel" --silent 2>/dev/null; then
+                echo "cancelled run ${id} (${run_status})"
+                cancelled=$((cancelled + 1))
+              else
+                echo "skip run ${id} (${run_status}): ja terminal ou sem permissao"
+              fi
+            done
+          done
+          echo "Total cancelado para ${BRANCH}: ${cancelled}"
