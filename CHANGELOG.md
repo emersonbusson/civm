@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/emersonbusson/civm/compare/v1.22.36...v1.23.0) (2026-08-29)
+
+
+### Features
+
+* initial open-source release of civm ([da8629e](https://github.com/emersonbusson/civm/commit/da8629e6d003beb7a3d73b825dc31c5532bc660c))
+
 ## [1.22.36](https://github.com/emersonbusson/civm/compare/v1.22.35...v1.22.36) (2026-08-09)
 
 
