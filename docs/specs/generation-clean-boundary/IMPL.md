@@ -3,7 +3,8 @@
 Issue: `emersonbusson/civm#226`  
 PRD: [`PRD.md`](PRD.md)  
 SPEC: [`SPECv2.md`](SPECv2.md)  
-Estado: implementação local concluída; rollout/Tier III pendentes.
+Estado: baseline live validada em 2026-09-29; hardening de retry local pendente
+de rollout.
 
 ## Implementação
 
@@ -20,8 +21,9 @@ Estado: implementação local concluída; rollout/Tier III pendentes.
 - `prepare` remove todo estado regenerável de runner, caches de linguagem,
   Docker, volumes e journal; falha se restar container; executa `fstrim` e
   solicita poweroff gracioso.
-- `resume` restaura maintenance e prova idle; `warn-clean` limita a limpeza
-  online ao builder cache e `fstrim`.
+- `resume` restaura maintenance e prova idle; erro em restore mantém o snapshot
+  e impede o broker-ready; `warn-clean` limita a limpeza online ao builder
+  cache e `fstrim`.
 - O sudoers concede NOPASSWD somente aos wrappers fixos. `hook install` prova
   funcionalmente o marcador, e `doctor` reporta incompatibilidade como crítica.
 - Todo comando SSH do rollback PowerShell recebe deadline remoto e `flock`; o
@@ -61,12 +63,34 @@ Executado em 2026-08-05 no worktree isolado, sem acessar a VM:
 `pwsh` não está instalado neste WSL. Os testes PowerShell/AST nativos não foram
 executados localmente e permanecem gate obrigatório do CI Windows do PR.
 
-## Validação operacional pendente
+## Validação operacional da baseline (registro de 2026-08-05)
 
 O rollout segue
 [`runbooks/GENERATION-CLEAN-BOUNDARY-ROLLOUT.md`](../../../runbooks/GENERATION-CLEAN-BOUNDARY-ROLLOUT.md).
 Nenhuma mutação de produção ou Tier III foi executada por esta implementação
 local. O PR Acme só pode ser atualizado depois da fase guest e da fase host.
+
+Status posterior: a baseline foi validada no host live em 2026-09-29; a
+correção de retry descrita abaixo ainda não foi publicada nem deployada.
+
+## Emenda 2026-09-29 — retry fail-closed do resume
+
+`maintenance exit` antes apenas registrava falha de `systemctl start` ou da
+restauração do label `civm`, apagava o snapshot e retornava sucesso. Isso podia
+fazer o `resume` parecer completo sem runner elegível e impedir retry.
+Agora agrega os erros, retorna não-zero e preserva o snapshot até todos os
+runners serem restaurados. O wrapper `resume` propaga a falha e o
+`BrokerReadyProbe` mantém a publicação fechada para retry no próximo tick.
+
+Validação local em 2026-09-29:
+
+- O teste de regressão falhou antes da correção para falha de start e falha de
+  label; passou após a correção e comprovou retry que remove o snapshot somente
+  depois da restauração completa.
+- `go test -race -count=1 ./...`: passou nos 36 packages.
+- `go vet ./...`: passou.
+- `git diff --check`: passou.
+- Nenhum binário foi publicado nem alterado na VM de produção nesta emenda.
 
 ## Rollback trigger
 
