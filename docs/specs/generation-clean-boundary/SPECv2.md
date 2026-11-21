@@ -152,6 +152,11 @@ Cada seta pode devolver `defer`; nenhuma devolve force. Após um defer depois do
 drain, a VM/runners permanecem no estado mais seguro que foi provado. Um retry
 é idempotente por locks/snapshot e não publica cedo.
 
+Se `maintenance exit` falhar ao iniciar qualquer unit ou recolocar qualquer
+label `civm`, `resume` retorna não-zero e mantém o snapshot de maintenance. O
+`BrokerReadyProbe` não publica o contexto e tenta `resume` novamente no próximo
+tick. Só remove o snapshot após restaurar todos os runners registrados.
+
 ## 6. Mudanças adicionais de arquivo
 
 Além da tabela da SPEC base:
@@ -180,6 +185,9 @@ Além dos CA da SPEC base:
   verbos fixos e não contém `Stop-VM -Force` em linha de código.
 - **CA-v2-5:** em `-EnforceQueue`, busca estática/teste prova que o caminho
   genérico não chama `Start-VM` para admissão antes da fila conceder.
+- **CA-v2-6:** falha ao iniciar unit ou restaurar label no `maintenance exit`
+  retorna erro e preserva o snapshot; um retry bem-sucedido restaura todos os
+  listeners/labels e remove o snapshot sem publicar admissão antecipada.
 
 ## 8. Rollback trigger revisado
 
@@ -187,6 +195,8 @@ Além dos triggers da SPEC base, fazer rollback do artefato se:
 
 - `enter --strict` retornar sucesso com qualquer unit ativa;
 - retry strict perder o snapshot parcial;
+- `maintenance exit` apagar o snapshot ou retornar sucesso com unit/label sem
+  restauração comprovada;
 - um run não-terminal sumir da coleta sem cancelamento do reaper;
 - uma rota `-EnforceQueue` iniciar/reativar runner antes de `V:>=80`.
 

@@ -421,28 +421,66 @@ func TestExitRemoveNotExistIsTolerated(t *testing.T) {
 	}
 }
 
-// TestExitRestoreStartFailureIsWarning: a failing systemctl start during Exit
-// must be tolerated (warning only) and not fail the overall restore.
-func TestExitRestoreStartFailureIsWarning(t *testing.T) {
+func TestExitRestoreFailuresKeepStateForRetry(t *testing.T) {
 	t.Parallel()
-	rec := newRecorder()
-	rec.listOutput = twoRunnerListing()
-	statePath := filepath.Join(t.TempDir(), "maintenance.json")
-	if _, err := Enter(context.Background(), rec.options(statePath)); err != nil {
-		t.Fatalf("Enter err = %v", err)
-	}
 
-	opts := rec.options(statePath)
-	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "sudo" && len(args) >= 2 && args[1] == "start" {
-			return nil, errFake
-		}
-		return nil, nil
+	tests := []struct {
+		name       string
+		failStart  bool
+		failLabels bool
+	}{
+		{name: "runner service start fails", failStart: true},
+		{name: "civm label restore fails", failLabels: true},
 	}
-	// gh add label also fails to cover restoreRunner's label-warn branch.
-	opts.GHFn = func(context.Context, ...string) ([]byte, error) { return nil, errFake }
-	if _, err := Exit(context.Background(), opts); err != nil {
-		t.Fatalf("Exit must tolerate start/label restore failures: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rec := newRecorder()
+			rec.listOutput = twoRunnerListing()
+			statePath := filepath.Join(t.TempDir(), "maintenance.json")
+			if _, err := Enter(context.Background(), rec.options(statePath)); err != nil {
+				t.Fatalf("Enter err = %v", err)
+			}
+
+			opts := rec.options(statePath)
+			goodRun, goodGH := opts.RunFn, opts.GHFn
+			failOnce := true
+			if tt.failStart {
+				opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					if failOnce && name == "sudo" && len(args) >= 2 && args[1] == "start" {
+						failOnce = false
+						return nil, errFake
+					}
+					return goodRun(ctx, name, args...)
+				}
+			}
+			if tt.failLabels {
+				opts.GHFn = func(ctx context.Context, args ...string) ([]byte, error) {
+					if failOnce && strings.Contains(strings.Join(args, " "), "labels[]=civm") {
+						failOnce = false
+						return nil, errFake
+					}
+					return goodGH(ctx, args...)
+				}
+			}
+			if _, err := Exit(context.Background(), opts); err == nil {
+				t.Fatal("Exit must report runner restore failures")
+			}
+			if _, ok := rec.files[statePath]; !ok {
+				t.Fatal("failed Exit removed maintenance state needed for retry")
+			}
+			if len(rec.removed) != 0 {
+				t.Fatalf("failed Exit removed maintenance state: %v", rec.removed)
+			}
+
+			opts.RunFn, opts.GHFn = goodRun, goodGH
+			if _, err := Exit(context.Background(), opts); err != nil {
+				t.Fatalf("retry Exit err = %v", err)
+			}
+			if _, ok := rec.files[statePath]; ok {
+				t.Fatal("successful retry kept maintenance state")
+			}
+		})
 	}
 }
 

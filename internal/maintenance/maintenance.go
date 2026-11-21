@@ -360,8 +360,18 @@ func Exit(ctx context.Context, opts Options) (State, error) {
 		return State{}, nil
 	}
 
+	var restoreFailures []error
 	for _, rn := range state.Runners {
-		restoreRunner(ctx, opts, rn)
+		if err := restoreRunner(ctx, opts, rn); err != nil {
+			restoreFailures = append(restoreFailures, err)
+		}
+	}
+	if len(restoreFailures) > 0 {
+		// Keep the snapshot so the host's next broker-ready probe can retry resume.
+		return state, fmt.Errorf(
+			"maintenance exit: %d of %d runner(s) not fully restored: %w",
+			len(restoreFailures), len(state.Runners), errors.Join(restoreFailures...),
+		)
 	}
 
 	if err := opts.RemoveFn(opts.StatePath); err != nil && !os.IsNotExist(err) {
@@ -462,18 +472,25 @@ func drainRunner(ctx context.Context, opts Options, rn runnerRef) RunnerState {
 	return applied
 }
 
-func restoreRunner(ctx context.Context, opts Options, rn RunnerState) {
+func restoreRunner(ctx context.Context, opts Options, rn RunnerState) error {
+	var failures []error
 	if rn.Stopped {
 		unit := runnerUnitName(rn)
 		if _, err := opts.RunFn(ctx, "sudo", "systemctl", "start", unit); err != nil {
 			warn("systemctl start %s: %v", unit, err)
+			failures = append(failures, fmt.Errorf("start %s: %w", unit, err))
 		}
 	}
 	if rn.LabelRemoved && rn.Repo != "" {
 		if err := addLabel(ctx, opts, rn.Repo, rn.Name, rn.RunnerID); err != nil {
 			warn("gh add label %s on %s: %v", civmLabel, rn.Repo, err)
+			failures = append(failures, fmt.Errorf("restore label %s on %s: %w", civmLabel, rn.Repo, err))
 		}
 	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("runner %s: %w", rn.Name, errors.Join(failures...))
 }
 
 func removeLabel(ctx context.Context, opts Options, repo, runnerName string) (int64, error) {
