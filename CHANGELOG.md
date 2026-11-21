@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.1](https://github.com/emersonbusson/civm/compare/v1.23.0...v1.23.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **maintenance:** preserve state when runner restore fails ([#282](https://github.com/emersonbusson/civm/issues/282)) ([d599362](https://github.com/emersonbusson/civm/commit/d599362f3375649bcf3a1bd0bb53d1edb65acff9))
+
 ## [1.23.0](https://github.com/emersonbusson/civm/compare/v1.22.36...v1.23.0) (2026-08-29)
 
 
