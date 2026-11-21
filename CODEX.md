@@ -7,6 +7,16 @@ Operação para CLIs estilo Codex (automação + DEFERRED + pause rules).
 CODEX.md complementa `AGENTS.md` (que complementa `README.md`). Em conflito:
 `rules/<topic>.md` > `CLAUDE.md` (se existir) > `AGENTS.md` > `CODEX.md`.
 
+## Idioma da documentação
+
+O inglês é a fonte canônica para documentação pública e operacional:
+README, contribuição, segurança, guias ativos, runbooks, templates e conteúdo
+novo. PT-BR fica em traduções `*.pt-BR.md` e na comunicação com mantenedores.
+Traduções devem apontar para a fonte inglesa e acompanhar mudanças de conteúdo
+voltado ao usuário; se estiverem defasadas, declarar isso. Specs históricas
+permanecem no idioma original até uma revisão. Mudanças na política de idioma
+seguem a sync rule entre README, AGENTS, CODEX e `rules/`.
+
 ## Escopo de execução autônoma
 
 civm permite execução autônoma para:

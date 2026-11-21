@@ -1,5 +1,26 @@
 # Contributing to civm
 
+> Documentation language: English is canonical. Brazilian Portuguese
+> translations use the `.pt-BR.md` suffix and link to their English source.
+> Keep maintainer-facing issues and pull request descriptions in Brazilian
+> Portuguese, following the repository templates.
+
+## Documentation language and scope
+
+- Write new public and operational documentation in English first.
+- Keep the English document at the canonical path (for example,
+  `runbooks/NAME.md`) and its PT-BR translation at
+  `runbooks/NAME.pt-BR.md`.
+- When changing a user-facing procedure, update its translation in the same
+  change. If it cannot be updated, mark it as out of date and link to English.
+- Historical specifications and session records may remain in their original
+  language until they are substantively revised. Do not translate archives
+  solely to relabel them.
+- Keep code, identifiers, automation output, and examples in English.
+  Operator-facing CLI messages follow the Portuguese policy in `AGENTS.md`.
+- Keep the overview and its PT-BR translation aligned on behavior and safety.
+  English controls when wording or detail differs.
+
 Thanks for helping improve civm — a toolkit to provision and operate
 **self-hosted GitHub Actions runners** (guest Linux + optional Windows host).
 
