@@ -136,11 +136,18 @@ Justificativa para mudar só um: incluir `[sync-skip-justified]` no commit body.
 
 ### Linguagem
 
-- **Inglês** em: code, comentários, identifiers, branch names, commit titles,
-  CLI flags, arquivos `.go`, `.yml`, `.yaml`.
-- **Português (BR)** em: `README.md`, `AGENTS.md`, `CODEX.md`, `MEMORY.md`,
-  `runbooks/*.md`, mensagens CLI ao usuário, commit body, PR descriptions,
-  Issue titles+bodies.
+- **Inglês** é o idioma canônico da documentação pública e operacional:
+  `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, guias ativos, runbooks,
+  templates e documentação nova. Código, comentários, identifiers, branches,
+  títulos de commit, flags CLI e arquivos `.go`/`.yml`/`.yaml` também ficam em
+  inglês.
+- **Português (BR)** é secundário para traduções em arquivos `*.pt-BR.md` e
+  para comunicação com mantenedores: `AGENTS.md`, `CODEX.md`, `MEMORY.md`,
+  corpos de commit, PRs, issues e mensagens CLI destinadas ao operador.
+- `README.md` e os documentos ingleses equivalentes são a fonte canônica.
+  Traduções devem acompanhar mudanças voltadas ao usuário; quando estiverem
+  defasadas, precisam indicar isso e linkar a fonte. Specs históricas ficam no
+  idioma original até uma revisão substantiva.
 
 ## Comandos diários
 

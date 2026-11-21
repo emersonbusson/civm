@@ -26,8 +26,15 @@ Antes de planejar, editar ou abrir PR:
 
 ## Commits & PRs
 
-- **Inglês** em: code, comentários, identifiers, branches, CLI flags, títulos de commit (Conventional Commits: `feat(scope): title`), arquivos `.go`/`.yml`/`.yaml`.
-- **PT-BR** em: `README.md`, `AGENTS.md`, `CODEX.md`, `MEMORY.md`, `runbooks/*.md`, mensagens CLI ao usuário, body de commits, PRs e issues.
+- **Inglês** é o idioma canônico da documentação pública e operacional:
+  `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, guias ativos, runbooks,
+  templates e documentação nova. Código, comentários, identifiers, branches,
+  flags CLI, títulos de commit e arquivos `.go`/`.yml`/`.yaml` também ficam em
+  inglês.
+- **PT-BR** é secundário para traduções `*.pt-BR.md` e para comunicação com
+  mantenedores: `AGENTS.md`, `CODEX.md`, `MEMORY.md`, corpos de commit, PRs,
+  issues e mensagens CLI destinadas ao operador. Specs históricas ficam no
+  idioma original até uma revisão substantiva.
 - Commits estruturais (power-state, scale-to-zero, disk-safety) requerem um `Rollback trigger:` no body.
 
 ## Visão geral da stack

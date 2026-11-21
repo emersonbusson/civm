@@ -1,6 +1,6 @@
 ---
 name: governance
-description: Regras para issues, PRs, labels, descrições em PT-BR e publicação segura.
+description: Regras de idioma, issues, PRs, labels e publicação segura.
 paths:
   - ".github/**"
   - "CLAUDE.md"
@@ -10,6 +10,22 @@ paths:
 ---
 
 # Governance rules
+
+## Idiomas da documentação
+
+- Inglês é a fonte canônica para documentação pública e operacional:
+  README principal, contribuição, segurança, guias ativos, runbooks,
+  templates e documentação nova.
+- Traduções PT-BR usam o sufixo `.pt-BR.md`, apontam para o documento inglês
+  correspondente e acompanham mudanças voltadas ao usuário. Se estiverem
+  defasadas, devem declarar isso e linkar a fonte.
+- Specs e registros históricos permanecem no idioma original até uma revisão
+  substantiva; documentos novos não devem misturar idiomas.
+- Comunicação dirigida aos mantenedores segue em PT-BR: respostas ao humano,
+  issues, corpos de PR, comentários user-facing e evidências de validação.
+  Títulos de PR e commits permanecem em inglês.
+- Antes de encerrar mudanças de documentação, confira links entre versões e
+  que o README principal aponta primeiro para o conteúdo inglês.
 
 ## Jules / agentes GitHub externos
 

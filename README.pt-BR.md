@@ -8,40 +8,43 @@
 [![CI](https://github.com/emersonbusson/civm/actions/workflows/ci.yml/badge.svg)](https://github.com/emersonbusson/civm/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**civm** é um conjunto de ferramentas open-source para **provisionar e operar runners self-hosted do GitHub Actions** em uma máquina virtual Linux (com helpers opcionais para host Windows Hyper-V), com paridade estrita em relação ao `ubuntu-latest`, rotinas automatizadas de limpeza de disco e memória, verificações de integridade (`health`/`doctor`) e templates de workflow prontos para uso.
+**civm** é um conjunto de ferramentas open-source para **provisionar e operar runners self-hosted do GitHub Actions** em uma VM Linux (com helpers opcionais para Windows Hyper-V). Ele oferece as peças operacionais ao redor do runner: provisionamento, verificações de saúde, limpeza segura, higiene da fila e templates reutilizáveis de workflow.
 
-| Se você deseja… | Utilize… |
-| --- | --- |
-| Instalar e manter a VM do runner | `civmctl` (este repositório, em Go) |
-| Scale-to-zero no host Windows Hyper-V | projeto irmão **civm-host** (opcional) |
-| CI para os seus repositórios de produto | seus repositórios + `templates/*.yml.template` |
+**O inglês é o idioma canônico da documentação.** Este README em português é a tradução secundária e pode ficar defasado em relação à versão em inglês. Consulte [CONTRIBUTING.md](CONTRIBUTING.md) para a política de idiomas.
 
-**O que o civm NÃO é**
+## Por onde começar
 
-- Não é uma plataforma customizada de orquestração de CI (o GitHub Actions continua sendo o agendador).
-- Não é um linter ou auditor de código de produtos — auditorias específicas continuam em cada repositório de aplicação.
-- Não é uma frota SaaS multi-tenant: **você** define e controla quais repositórios a máquina atende.
+- **Operar um runner Linux:** [guia de runner multi-projeto](runbooks/MULTI-PROJECT-RUNNER.md)
+- **Ver a documentação:** [índice de documentação](docs/README.pt-BR.md)
+- **Adotar templates de workflow:** [`templates/`](templates/)
+- **Contribuir:** [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Reportar um problema de segurança:** [SECURITY.md](SECURITY.md)
 
-<p align="center">
-  <img src="docs/assets/civm-vs-paid-ci.jpg" alt="Comparação civm vs GitHub-Hosted CI" width="100%">
-</p>
+## O que o civm oferece
 
-## Por que usar o civm? (civm vs CI Pago em Nuvem)
+- `civmctl`, CLI em Go para provisionar e manter o guest Linux do runner.
+- Hooks gerenciados, timers systemd, diagnósticos de saúde/capacidade e limpeza da fila.
+- Templates copiáveis do GitHub Actions para repositórios que usam o runner.
+- Helpers opcionais para o host Windows Hyper-V iniciar e recuperar uma VM dedicada.
 
-| Dimensão / Recurso | GitHub-Hosted Padrão (`ubuntu-latest`) | Arquitetura Self-Hosted civm | Vantagem com `civm` |
-| --- | --- | --- | --- |
-| **Custo Mensal** | Pago por minuto ($0.008/min além da cota) | **R$ 0,00 / mês** (Executa no seu hardware dedicado/VM) | **Zero fatura recorrente de nuvem** |
-| **Poder Computacional** | 2–4 vCPUs / 7–16 GB RAM | **12 vCPUs / 12–32 GB RAM** (Uso total das threads do host) | **Testes e builds 3x a 6x mais rápidos** |
-| **Caches de Build & Docker** | Cold start a cada job (baixa camadas pela rede) | **Caches locais em SSD** (`_work/_tool`, camadas Docker locais) | **Checkout e build quase instantâneos** |
-| **Gestão de Energia** | Gerenciado pelo provedor | **Scale-to-Zero Inteligente (Hyper-V Brain)** | **Zero consumo ocioso de energia** |
-| **Paridade de Ferramentas** | `ubuntu-latest` (Ubuntu 24.04 LTS) | **Paridade Estrita** (`civmctl version-pins` / `parity`) | **100% de compatibilidade de workflows** |
-| **Higiene da Fila** | Cancela apenas no mesmo workflow | **Reaper Cross-Repo** (cancela PRs fechados e SHAs obsoletos) | **Fila sempre limpa e sem desperdício** |
-| **Defesa de Disco e RAM** | Descarte efêmero | **Watchdogs Autônomos** (cleanup emergencial, fstrim, VHDX shrink) | **Auto-recuperação contínua 24/7** |
-| **Roteamento Inteligente** | Backend único | **Roteador Dinâmico de CI** (fallback automático Cloud/civm) | **Arquitetura híbrida e resiliente** |
+O GitHub Actions continua sendo o agendador. O civm não é um serviço de CI
+hospedado nem uma frota multi-tenant: operadores escolhem quais repositórios
+um runner atende.
 
-## Licença
+## Modelo operacional
 
-[MIT](LICENSE) — consulte [CONTRIBUTING.md](CONTRIBUTING.md) e [SECURITY.md](SECURITY.md).
+```mermaid
+flowchart LR
+    GH[GitHub Actions] -->|enfileira um job| VM[VM runner Ubuntu]
+    HOST[Host Windows Hyper-V opcional] -->|inicia e recupera a VM| VM
+    VM -->|hooks, timers, diagnósticos| CIVM[civmctl]
+    T[Templates de workflow] --> GH
+```
+
+O runner executa código dos workflows em hardware administrado por quem opera
+a máquina. Considere essa fronteira de confiança ao escolher quais repositórios
+podem usá-lo. O dispatcher JIT externo permanece em **NO-GO**: não há driver
+de isolamento aprovado. Consulte o [runbook JIT (PT-BR)](runbooks/TRUSTED-JIT-DISPATCHER.md).
 
 ## Host Windows Hyper-V (Scale-to-Zero Opcional)
 
@@ -49,28 +52,15 @@ A automação de produção do host Windows reside em PowerShell sob `deploy/win
 
 Configure as listas de **`Repos`** e **`TokenPaths`** no host (mantidos vazios no repositório por design de segurança). Recomenda-se um wrapper local no laboratório para que detalhes da frota nunca sejam commitados no Git.
 
-- Runbook: [`runbooks/HOST-ORCHESTRATOR-SETUP.md`](runbooks/HOST-ORCHESTRATOR-SETUP.md)
+- Runbook (PT-BR): [`runbooks/HOST-ORCHESTRATOR-SETUP.md`](runbooks/HOST-ORCHESTRATOR-SETUP.md)
 - Especificação de comportamento: [`docs/specs/orchestrator-scale-to-zero/`](docs/specs/orchestrator-scale-to-zero/)
 - Port opcional em C# (shadow): projeto irmão **civm-host**
 
-## Bootstrap (Guest Ubuntu 24.04)
+## Configuração do runner
 
-Em uma VM limpa Ubuntu 24.04 LTS (como usuário com privilégios `sudo`):
-
-```bash
-git clone https://github.com/emersonbusson/civm.git /opt/civm   # ou seu fork
-cd /opt/civm
-go build -o /usr/local/bin/civmctl ./cmd/civmctl
-sudo civmctl bootstrap --execute
-sudo cp deploy/systemd/civmctl-*.service deploy/systemd/civmctl-*.timer /etc/systemd/system/
-sudo install -d -m 0755 /etc/civm
-printf '%s
-' 'CIVM_REAPER_REPOS=<owner/repo[,owner/repo]>' |   sudo tee /etc/civm/run-reaper.env >/dev/null
-sudo systemctl daemon-reload
-sudo systemctl enable --now   civmctl-cleanup.timer civmctl-disk-watchdog.timer   civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer   civmctl-metrics.timer civmctl-run-reaper.timer
-civmctl parity
-civmctl health
-```
+Os procedimentos detalhados de provisionamento e migração estão no
+[guia de runner multi-projeto](runbooks/MULTI-PROJECT-RUNNER.md). Consulte o
+índice de documentação para identificar o idioma disponível em cada guia.
 
 Registrar um novo runner (o token é efêmero e nunca deve ser commitado):
 
@@ -79,9 +69,9 @@ TOKEN=$(gh api -X POST /repos/<owner>/<repo>/actions/runners/registration-token 
 civmctl runner add --repo=<owner>/<repo> --token="$TOKEN" --short=<short> --execute
 ```
 
-Recomenda-se utilizar **um único runner em nível de organização** quando vários repositórios compartilham a mesma máquina (para garantir serialização limpa de jobs). Consulte [`runbooks/RUNNER-SERIALIZATION.md`](runbooks/RUNNER-SERIALIZATION.md) e [`runbooks/ORG-RUNNER-ADOPTION.md`](runbooks/ORG-RUNNER-ADOPTION.md).
+Recomenda-se utilizar **um único runner em nível de organização** quando vários repositórios compartilham a mesma máquina (para garantir serialização limpa de jobs). Consulte os guias PT-BR [`runbooks/RUNNER-SERIALIZATION.md`](runbooks/RUNNER-SERIALIZATION.md) e [`runbooks/ORG-RUNNER-ADOPTION.md`](runbooks/ORG-RUNNER-ADOPTION.md).
 
-Notas detalhadas de arquitetura multi-runner e disco: [`runbooks/MULTI-PROJECT-RUNNER.md`](runbooks/MULTI-PROJECT-RUNNER.md).
+Guia de operação multi-runner, disco e host (PT-BR): [`runbooks/MULTI-PROJECT-RUNNER.md`](runbooks/MULTI-PROJECT-RUNNER.md).
 
 ## Comandos do civmctl
 
@@ -113,11 +103,11 @@ Notas detalhadas de arquitetura multi-runner e disco: [`runbooks/MULTI-PROJECT-R
 | `civmctl bootstrap-everything` | Wrapper completo: cópia de units systemd + reload + bootstrap |
 | `civmctl disk-watchdog` | Dispara limpeza emergencial se o uso de disco ultrapassar o limite (padrão 60%) |
 | `civmctl disk-audit [--json]` | Auditoria read-only dos maiores consumidores de disco (`_work`, caches, Docker, logs) |
-| `civmctl jit-dispatch` | Dispatcher one-shot isolado: despacha workflows em ambiente efêmero descartável |
+| `civmctl jit-dispatch` | Dispatcher experimental one-shot; ativação permanece em **NO-GO** até existir driver de isolamento aprovado |
 
 ### Piloto JIT Confiável
 
-O dispatcher externo utiliza a API do GitHub Actions, exige retorno com `workflow_run_id` explícito, utiliza tokens via stdin e gera labels nonce de uso único (256 bits). O driver executa código candidato exclusivamente em máquinas virtuais descartáveis sem montagem de disco do host, sem acesso ao Docker do host e sem expor segredos de produto. A ativação permanece em **NO-GO** até a disponibilização de driver de isolamento auditado. Consulte [`runbooks/TRUSTED-JIT-DISPATCHER.md`](runbooks/TRUSTED-JIT-DISPATCHER.md).
+O dispatcher externo exige um `workflow_run_id` explícito, recebe tokens via stdin e gera labels nonce de uso único (256 bits). A ativação permanece em **NO-GO** porque não há driver de isolamento aprovado. Consulte o [runbook JIT (PT-BR)](runbooks/TRUSTED-JIT-DISPATCHER.md).
 
 ### Adicionar Runner para Novo Repositório (1 Comando)
 
@@ -137,7 +127,7 @@ civmctl runner add --repo=<owner>/<repo> --token=$TOKEN --short=<short> --execut
 
 | Arquivo | Função |
 |---|---|
-| `README.md` / `README.pt-BR.md` | Documentação principal em inglês e português |
+| `README.md` / `README.pt-BR.md` | Visão canônica em inglês / tradução secundária PT-BR |
 | `LICENSE` / `CONTRIBUTING.md` / `SECURITY.md` | Diretrizes open-source e governança |
 | `.github/workflows/ci.yml` | CI do repositório em runners GitHub-hosted gratuitos |
 | `.gitignore` | Proteção contra commits de segredos ou logs de lab |
@@ -174,7 +164,7 @@ civmctl runner add --repo=<owner>/<repo> --token=$TOKEN --short=<short> --execut
 
 3. **Execução de Workflows**: Repositórios consumidores referenciam `runs-on: [self-hosted, civm]` em seus workflows.
 
-4. **Fallback Inteligente de Custos**: Workflows podem rodar em `ubuntu-latest` (GitHub-hosted) quando o plano permitir e migrar para `civm` (zero custo) quando houver necessidade de economizar minutos.
+4. **Template opcional de roteamento**: `templates/ci-router.yml.template` usa o detector heurístico de billing para escolher um runner para os jobs do projeto; quando o resultado é desconhecido, usa GitHub-hosted como padrão.
 
 ## Versionamento e Releases
 
@@ -186,3 +176,7 @@ O `civm` segue SemVer (MAJOR.MINOR.PATCH). Tags e GitHub Releases são gerados a
 - `docs:`, `chore:`, `test:`, `build:` → não alteram a versão.
 
 O workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) mantém o PR de release aberto e atualizado. Ao fazer o merge desse PR, a tag é criada e o release é publicado automaticamente. Detalhes em [`runbooks/RELEASE-AUTOMATION.md`](runbooks/RELEASE-AUTOMATION.md).
+
+## Licença
+
+[MIT](LICENSE) — consulte [CONTRIBUTING.md](CONTRIBUTING.md) e [SECURITY.md](SECURITY.md).
